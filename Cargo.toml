@@ -5,6 +5,9 @@ edition = "2024"
 license = "MPL-2.0"
 
 [dependencies]
-iced = { version = "0.14.0", features = ["tokio"] }
+iced = { version = "0.14", features = ["tokio", "canvas"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+jj-lib = "0.37.0"
+jj-cli = "0.37.0"
+chrono = "0.4"

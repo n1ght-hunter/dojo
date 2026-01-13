@@ -1,0 +1,5 @@
+# Dojo-specific default settings
+# These are merged with jj's defaults and user config
+
+[dojo]
+# Future dojo-specific settings can go here
