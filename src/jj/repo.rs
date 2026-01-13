@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
+use jj_lib::diff::{ContentDiff, DiffHunkKind};
 use jj_cli::config::{ConfigEnv, config_from_environment, default_config_layers};
 use jj_lib::backend::CommitId;
 use jj_lib::commit::Commit;
@@ -44,12 +45,36 @@ pub struct FileChange {
     pub has_conflict: bool,
 }
 
+/// A segment of text in a diff line, with optional highlighting
+#[derive(Debug, Clone)]
+pub struct DiffSegment {
+    pub text: String,
+    pub highlighted: bool,
+}
+
+impl DiffSegment {
+    pub fn new(text: impl Into<String>, highlighted: bool) -> Self {
+        Self {
+            text: text.into(),
+            highlighted,
+        }
+    }
+
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self::new(text, false)
+    }
+
+    pub fn highlighted(text: impl Into<String>) -> Self {
+        Self::new(text, true)
+    }
+}
+
 /// A line in a diff
 #[derive(Debug, Clone)]
 pub enum DiffLine {
     Context(String),
-    Added(String),
-    Removed(String),
+    Added(Vec<DiffSegment>),
+    Removed(Vec<DiffSegment>),
     Hunk {
         old_start: u32,
         old_count: u32,
@@ -268,7 +293,38 @@ impl RepoHandle {
         }
     }
 
-    /// Simple line-by-line diff algorithm
+    /// Compute word-level diff for a pair of lines using jj-lib
+    fn compute_word_diff(old: &str, new: &str) -> (Vec<DiffSegment>, Vec<DiffSegment>) {
+        let diff = ContentDiff::by_word([old.as_bytes(), new.as_bytes()]);
+        let mut removed_segments = Vec::new();
+        let mut added_segments = Vec::new();
+
+        for hunk in diff.hunks() {
+            match hunk.kind {
+                DiffHunkKind::Matching => {
+                    // Same in both - add as plain to both sides
+                    let text = String::from_utf8_lossy(hunk.contents[0]).to_string();
+                    removed_segments.push(DiffSegment::plain(&text));
+                    added_segments.push(DiffSegment::plain(text));
+                }
+                DiffHunkKind::Different => {
+                    // Different - old goes to removed (highlighted), new goes to added (highlighted)
+                    let old_text = String::from_utf8_lossy(hunk.contents[0]).to_string();
+                    let new_text = String::from_utf8_lossy(hunk.contents[1]).to_string();
+                    if !old_text.is_empty() {
+                        removed_segments.push(DiffSegment::highlighted(&old_text));
+                    }
+                    if !new_text.is_empty() {
+                        added_segments.push(DiffSegment::highlighted(new_text));
+                    }
+                }
+            }
+        }
+
+        (removed_segments, added_segments)
+    }
+
+    /// Simple line-by-line diff algorithm with word-level highlighting
     fn compute_diff(old_lines: &[&str], new_lines: &[&str]) -> Vec<DiffLine> {
         let mut result = Vec::new();
 
@@ -283,16 +339,40 @@ impl RepoHandle {
             if lcs_idx < lcs.len() {
                 let (lcs_old, lcs_new) = lcs[lcs_idx];
 
-                // Output removed lines before the LCS match
+                // Collect removed and added lines before the LCS match
+                let removed_start = old_idx;
+                let added_start = new_idx;
+
                 while old_idx < lcs_old {
-                    result.push(DiffLine::Removed(old_lines[old_idx].to_string()));
                     old_idx += 1;
                 }
-
-                // Output added lines before the LCS match
                 while new_idx < lcs_new {
-                    result.push(DiffLine::Added(new_lines[new_idx].to_string()));
                     new_idx += 1;
+                }
+
+                let removed_count = old_idx - removed_start;
+                let added_count = new_idx - added_start;
+
+                // Pair up removed and added lines for word-level diff
+                let paired = removed_count.min(added_count);
+                for i in 0..paired {
+                    let old_line = old_lines[removed_start + i];
+                    let new_line = new_lines[added_start + i];
+                    let (removed_segs, added_segs) = Self::compute_word_diff(old_line, new_line);
+                    result.push(DiffLine::Removed(removed_segs));
+                    result.push(DiffLine::Added(added_segs));
+                }
+
+                // Output remaining unpaired removed lines
+                for i in paired..removed_count {
+                    let line = old_lines[removed_start + i];
+                    result.push(DiffLine::Removed(vec![DiffSegment::highlighted(line)]));
+                }
+
+                // Output remaining unpaired added lines
+                for i in paired..added_count {
+                    let line = new_lines[added_start + i];
+                    result.push(DiffLine::Added(vec![DiffSegment::highlighted(line)]));
                 }
 
                 // Output the context line (matching line)
@@ -304,15 +384,27 @@ impl RepoHandle {
 
                 lcs_idx += 1;
             } else {
-                // No more LCS matches, output remaining lines
-                while old_idx < old_lines.len() {
-                    result.push(DiffLine::Removed(old_lines[old_idx].to_string()));
-                    old_idx += 1;
+                // No more LCS matches - pair remaining lines for word diff
+                let remaining_old: Vec<_> = old_lines[old_idx..].to_vec();
+                let remaining_new: Vec<_> = new_lines[new_idx..].to_vec();
+
+                let paired = remaining_old.len().min(remaining_new.len());
+                for i in 0..paired {
+                    let (removed_segs, added_segs) =
+                        Self::compute_word_diff(remaining_old[i], remaining_new[i]);
+                    result.push(DiffLine::Removed(removed_segs));
+                    result.push(DiffLine::Added(added_segs));
                 }
-                while new_idx < new_lines.len() {
-                    result.push(DiffLine::Added(new_lines[new_idx].to_string()));
-                    new_idx += 1;
+
+                // Output remaining unpaired lines
+                for line in remaining_old.iter().skip(paired) {
+                    result.push(DiffLine::Removed(vec![DiffSegment::highlighted(*line)]));
                 }
+                for line in remaining_new.iter().skip(paired) {
+                    result.push(DiffLine::Added(vec![DiffSegment::highlighted(*line)]));
+                }
+
+                break;
             }
         }
 

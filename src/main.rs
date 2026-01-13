@@ -2,6 +2,7 @@ mod error;
 mod jj;
 mod repo_state;
 mod screens;
+mod settings;
 mod widgets;
 
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use iced::widget::{center, column, container, pane_grid, text};
 use iced::{Element, Fill, Task, Theme};
 
 use repo_state::RepoState;
+use settings::Settings;
 use widgets::{sidebar, tab_bar, toolbar};
 
 fn main() -> iced::Result {
@@ -25,6 +27,8 @@ struct App {
     panes: pane_grid::State<PaneType>,
     loading: bool,
     error: Option<String>,
+    settings: Settings,
+    theme: Theme,
 }
 
 /// Types of panes in the application
@@ -87,6 +91,8 @@ fn boot() -> (App, Task<Message>) {
         panes,
         loading: true,
         error: None,
+        settings: Settings::default(),
+        theme: Theme::Dracula,
     };
 
     // Load the repository
@@ -229,6 +235,8 @@ fn view(app: &App) -> Element<'_, Message> {
                     active_repo.log_screen.selected_commit(),
                     &active_repo.files,
                     &active_repo.diffs,
+                    &app.settings.diff,
+                    &app.theme,
                 )
                 .map(repo_state::Message::RightPanel)
                 .map(|m| Message::Repo(app.active_repo, m)),
@@ -253,6 +261,6 @@ fn view(app: &App) -> Element<'_, Message> {
     container(layout).width(Fill).height(Fill).into()
 }
 
-fn theme(_app: &App) -> Theme {
-    Theme::Dracula
+fn theme(app: &App) -> Theme {
+    app.theme.clone()
 }

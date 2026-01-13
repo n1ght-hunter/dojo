@@ -1,7 +1,8 @@
 use iced::widget::{button, column, container, row, scrollable, text, Column};
-use iced::{Element, Fill, Length};
+use iced::{Element, Fill, Length, Theme};
 
 use crate::jj::{ChangeKind, CommitInfo, FileChange, FileDiff};
+use crate::settings::DiffSettings;
 use crate::widgets::diff::view_file_diff_content;
 
 /// Messages for summary interactions
@@ -18,6 +19,9 @@ pub fn view<'a>(
     files: &'a [FileChange],
     diffs: &'a [FileDiff],
     expanded_files: &'a std::collections::HashSet<String>,
+    width: f32,
+    settings: &'a DiffSettings,
+    theme: &'a Theme,
 ) -> Element<'a, Message> {
     match commit {
         None => container(text("No commit selected").size(14).style(text::default))
@@ -31,7 +35,7 @@ pub fn view<'a>(
             let content = column![
                 metadata_section(commit),
                 message_section(commit),
-                files_section(files, diffs, expanded_files),
+                files_section(files, diffs, expanded_files, width, settings, theme),
             ]
             .spacing(0);
 
@@ -124,6 +128,9 @@ fn files_section<'a>(
     files: &'a [FileChange],
     diffs: &'a [FileDiff],
     expanded_files: &'a std::collections::HashSet<String>,
+    width: f32,
+    settings: &'a DiffSettings,
+    theme: &'a Theme,
 ) -> Element<'a, Message> {
     if files.is_empty() {
         return container(text("No files changed").size(11).style(text::default))
@@ -184,7 +191,7 @@ fn files_section<'a>(
     for file in files {
         let is_expanded = expanded_files.contains(&file.path);
         let diff = diffs.iter().find(|d| d.path == file.path);
-        content = content.push(file_dropdown(file, is_expanded, diff));
+        content = content.push(file_dropdown(file, is_expanded, diff, width, settings, theme));
     }
 
     content.into()
@@ -194,6 +201,9 @@ fn file_dropdown<'a>(
     file: &'a FileChange,
     is_expanded: bool,
     diff: Option<&'a FileDiff>,
+    width: f32,
+    settings: &'a DiffSettings,
+    theme: &'a Theme,
 ) -> Element<'a, Message> {
     let toggle_icon = if is_expanded { "▼" } else { "▶" };
 
@@ -250,7 +260,8 @@ fn file_dropdown<'a>(
 
     if is_expanded {
         if let Some(diff) = diff {
-            let diff_content: Element<'_, Message> = view_file_diff_content(diff);
+            let diff_content: Element<'_, Message> =
+                view_file_diff_content(diff, width, settings, theme);
             column![header_container, diff_content].spacing(0).into()
         } else {
             let loading = container(text("Loading diff...").size(10).style(text::default))

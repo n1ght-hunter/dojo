@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use iced::widget::{button, column, container, row, rule, scrollable, text};
+use iced::widget::{button, column, container, responsive, row, rule, scrollable, text};
 use iced::{Border, Element, Fill, Length, Theme};
 
 use crate::jj::{CommitInfo, FileChange, FileDiff};
+use crate::settings::DiffSettings;
 use crate::widgets::{diff, summary};
 
 /// Tab types for the right panel
@@ -73,9 +74,15 @@ impl RightPanel {
         commit: Option<&'a CommitInfo>,
         files: &'a [FileChange],
         diffs: &'a [FileDiff],
+        settings: &'a DiffSettings,
+        theme: &'a Theme,
     ) -> Element<'a, Message> {
         let tab_bar = self.view_tab_bar(files);
-        let content = self.view_content(commit, files, diffs);
+
+        // Use responsive to get actual width for diff layout decisions
+        let content = responsive(move |size| {
+            self.view_content(commit, files, diffs, size.width, settings, theme)
+        });
 
         column![tab_bar, content].spacing(0).into()
     }
@@ -119,17 +126,23 @@ impl RightPanel {
         commit: Option<&'a CommitInfo>,
         files: &'a [FileChange],
         diffs: &'a [FileDiff],
+        width: f32,
+        settings: &'a DiffSettings,
+        theme: &'a Theme,
     ) -> Element<'a, Message> {
         match &self.active_tab {
             Tab::Summary => {
-                summary::view(commit, files, diffs, &self.expanded_files).map(Message::Summary)
+                summary::view(commit, files, diffs, &self.expanded_files, width, settings, theme)
+                    .map(Message::Summary)
             }
             Tab::File(path) => {
                 if let Some(file_diff) = diffs.iter().find(|d| &d.path == path) {
-                    scrollable(diff::view_file_diff_content::<Message>(file_diff))
-                        .width(Fill)
-                        .height(Fill)
-                        .into()
+                    scrollable(diff::view_file_diff_content::<Message>(
+                        file_diff, width, settings, theme,
+                    ))
+                    .width(Fill)
+                    .height(Fill)
+                    .into()
                 } else {
                     container(text("Loading diff...").size(12))
                         .padding(12)
