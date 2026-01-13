@@ -1,3 +1,3 @@
 mod repo;
 
-pub use repo::{CommitInfo, RepoHandle};
+pub use repo::{ChangeKind, CommitInfo, DiffLine, FileChange, FileDiff, RepoHandle};

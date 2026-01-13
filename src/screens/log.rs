@@ -1,7 +1,6 @@
-use iced::widget::{Row, column, container, row, scrollable, text};
+use iced::widget::{column, container, mouse_area, row, scrollable, text, Row};
 use iced::{Element, Fill, Length};
 
-use crate::Message;
 use crate::jj::CommitInfo;
 use crate::widgets::GraphColumn;
 
@@ -43,13 +42,14 @@ impl LogScreen {
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    /// View returns Element<usize> where the usize is the selected commit index
+    pub fn view(&self) -> Element<'_, usize> {
         if self.commits.is_empty() {
             return container(text("No commits found")).padding(20).into();
         }
 
-        // Build commit info rows (without graph - graph is separate canvas)
-        let commit_rows: Vec<Element<'_, Message>> = self
+        // Build commit info rows
+        let commit_rows: Vec<Element<'_, usize>> = self
             .commits
             .iter()
             .enumerate()
@@ -59,8 +59,8 @@ impl LogScreen {
         let commit_list = column(commit_rows);
 
         // Create a row with graph on left and commit info on right
-        let content: Row<'_, Message> = row![
-            self.graph.view(),
+        let content: Row<'_, usize> = row![
+            self.graph.view().map(|_: ()| 0usize), // Graph doesn't emit messages
             scrollable(commit_list).height(Fill).width(Fill),
         ]
         .spacing(5);
@@ -72,61 +72,62 @@ impl LogScreen {
             .into()
     }
 
-    fn commit_row<'a>(&'a self, index: usize, commit: &'a CommitInfo) -> Element<'a, Message> {
+    fn commit_row(&self, index: usize, commit: &CommitInfo) -> Element<'_, usize> {
         let is_selected = self.selected_index == Some(index);
 
-        // Short commit id (first 8 chars)
-        let short_id: String = if commit.commit_id.len() > 8 {
-            commit.commit_id[..8].to_string()
-        } else {
-            commit.commit_id.clone()
-        };
-
-        // Short change id (first 8 chars)
-        let short_change_id: String = if commit.change_id.len() > 8 {
-            commit.change_id[..8].to_string()
-        } else {
-            commit.change_id.clone()
-        };
-
         // First line of description
-        let first_line: String = commit
+        let first_line = commit
             .description
             .lines()
             .next()
             .unwrap_or("(no description)")
             .to_string();
 
-        // Format timestamp
-        let time_str: String = commit.timestamp.format("%Y-%m-%d %H:%M").to_string();
+        // Format timestamp relative or absolute
+        let time_str = commit.timestamp.format("%Y-%m-%d").to_string();
 
         // Clone author for ownership
         let author = commit.author.clone();
 
-        let content = row![
-            text(short_change_id).size(12).color([0.69, 0.58, 0.98]), // Purple for change id
-            text(short_id).size(12).color([0.38, 0.45, 0.64]),        // Gray for commit id
-            text(author).size(12).width(Length::Fixed(120.0)),
-            text(time_str).size(12).color([0.38, 0.45, 0.64]),
-            text(first_line).size(12),
-        ]
-        .spacing(10)
-        .height(Length::Fixed(ROW_HEIGHT));
+        // Build the row content
+        let mut content_row = Row::new().spacing(8);
+
+        // Description (main content)
+        content_row = content_row.push(text(first_line).size(12).width(Fill));
+
+        // Bookmark badges (inline, like Sublime Merge)
+        for bookmark in &commit.bookmarks {
+            content_row = content_row.push(bookmark_badge(bookmark.clone()));
+        }
+
+        // Parent count badge for merge commits
+        if commit.parent_ids.len() > 1 {
+            content_row = content_row.push(parent_count_badge(commit.parent_ids.len()));
+        }
+
+        // Author
+        content_row = content_row
+            .push(text(author).size(11).style(text::primary).width(Length::Fixed(100.0)));
+
+        // Timestamp
+        content_row = content_row
+            .push(text(time_str).size(11).style(text::default).width(Length::Fixed(80.0)));
+
+        let content = content_row.height(Length::Fixed(ROW_HEIGHT));
 
         let row_container = container(content)
             .width(Fill)
+            .padding([0, 8])
             .center_y(Length::Fixed(ROW_HEIGHT));
 
-        if is_selected {
-            row_container
-                .style(|_theme| container::Style {
-                    background: Some(iced::Color::from_rgb(0.26, 0.28, 0.35).into()),
-                    ..Default::default()
-                })
-                .into()
+        let styled_row: Element<'_, usize> = if is_selected {
+            row_container.style(container::rounded_box).into()
         } else {
             row_container.into()
-        }
+        };
+
+        // Make the row clickable - returns the index
+        mouse_area(styled_row).on_press(index).into()
     }
 }
 
@@ -134,4 +135,20 @@ impl Default for LogScreen {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Bookmark badge
+fn bookmark_badge(name: String) -> Element<'static, usize> {
+    container(text(name).size(10))
+        .padding([2, 6])
+        .style(container::rounded_box)
+        .into()
+}
+
+/// Parent count badge for merge commits
+fn parent_count_badge(count: usize) -> Element<'static, usize> {
+    container(text(format!("[{}]", count)).size(10).style(text::primary))
+        .padding([2, 4])
+        .style(container::bordered_box)
+        .into()
 }

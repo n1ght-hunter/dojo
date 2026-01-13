@@ -1,7 +1,6 @@
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
 use iced::{Color, Element, Length, Point, Rectangle, Theme};
 
-use crate::Message;
 use crate::jj::CommitInfo;
 
 /// Column spacing for graph lines
@@ -10,16 +9,6 @@ const COLUMN_WIDTH: f32 = 20.0;
 const ROW_HEIGHT: f32 = 30.0;
 /// Node radius
 const NODE_RADIUS: f32 = 5.0;
-
-/// Colors for different graph lanes (Dracula-inspired)
-const LANE_COLORS: &[Color] = &[
-    Color::from_rgb(0.74, 0.58, 0.98), // Purple
-    Color::from_rgb(0.31, 0.98, 0.48), // Green
-    Color::from_rgb(1.0, 0.47, 0.65),  // Pink
-    Color::from_rgb(0.55, 0.91, 0.99), // Cyan
-    Color::from_rgb(1.0, 0.72, 0.42),  // Orange
-    Color::from_rgb(0.95, 0.98, 0.55), // Yellow
-];
 
 /// Graph column state for rendering
 #[derive(Debug, Clone)]
@@ -114,7 +103,7 @@ impl GraphColumn {
                     row.lines.push(GraphLine {
                         from_column: col,
                         to_column: col,
-                        color_index: col % LANE_COLORS.len(),
+                        color_index: col,
                         line_type: LineType::Continuation,
                     });
                 }
@@ -152,7 +141,7 @@ impl GraphColumn {
                     row.lines.push(GraphLine {
                         from_column: node_column,
                         to_column: parent_column,
-                        color_index: parent_column % LANE_COLORS.len(),
+                        color_index: parent_column,
                         line_type: if node_column == parent_column {
                             LineType::Vertical
                         } else {
@@ -188,7 +177,7 @@ impl GraphColumn {
     }
 
     /// Render the graph as a canvas element
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view<M: 'static>(&self) -> Element<'_, M> {
         let height = (self.graph_data.len() as f32) * ROW_HEIGHT;
         let width = self.width();
 
@@ -209,25 +198,40 @@ struct GraphRenderer<'a> {
     graph: &'a GraphColumn,
 }
 
-impl<'a> canvas::Program<Message> for GraphRenderer<'a> {
+/// Get lane colors from the theme palette
+fn get_lane_colors(theme: &Theme) -> Vec<Color> {
+    let palette = theme.extended_palette();
+    vec![
+        palette.primary.strong.color,   // Primary (pink/purple in Dracula)
+        palette.secondary.strong.color, // Secondary
+        palette.success.strong.color,   // Green
+        palette.danger.strong.color,    // Red
+        palette.primary.weak.color,     // Lighter primary
+        palette.secondary.weak.color,   // Lighter secondary
+    ]
+}
+
+impl<M> canvas::Program<M> for GraphRenderer<'_> {
     type State = ();
 
     fn draw(
         &self,
         _state: &Self::State,
         renderer: &iced::Renderer,
-        _theme: &Theme,
+        theme: &Theme,
         bounds: Rectangle,
         _cursor: iced::mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
+        let palette = theme.extended_palette();
+        let lane_colors = get_lane_colors(theme);
 
         for (row_idx, row) in self.graph.graph_data.iter().enumerate() {
             let y = (row_idx as f32 + 0.5) * ROW_HEIGHT;
 
             // Draw lines first (so nodes are on top)
             for line in &row.lines {
-                let color = LANE_COLORS[line.color_index % LANE_COLORS.len()];
+                let color = lane_colors[line.color_index % lane_colors.len()];
                 let stroke = Stroke::default().with_color(color).with_width(2.0);
 
                 let from_x = (line.from_column as f32 + 0.5) * COLUMN_WIDTH;
@@ -265,17 +269,19 @@ impl<'a> canvas::Program<Message> for GraphRenderer<'a> {
             // Draw the node
             let node_x = (row.node_column as f32 + 0.5) * COLUMN_WIDTH;
             let node_color = if row.is_working_copy {
-                Color::from_rgb(0.31, 0.98, 0.48) // Green for working copy
+                palette.success.strong.color // Green for working copy
             } else {
-                LANE_COLORS[row.node_column % LANE_COLORS.len()]
+                lane_colors[row.node_column % lane_colors.len()]
             };
 
             let node = Path::circle(Point::new(node_x, y), NODE_RADIUS);
             frame.fill(&node, node_color);
 
-            // Draw white outline for working copy
+            // Draw outline for working copy
             if row.is_working_copy {
-                let outline = Stroke::default().with_color(Color::WHITE).with_width(2.0);
+                let outline = Stroke::default()
+                    .with_color(palette.background.base.text)
+                    .with_width(2.0);
                 frame.stroke(&node, outline);
             }
         }
