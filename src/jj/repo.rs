@@ -115,6 +115,8 @@ pub struct FileDiff {
 pub struct RepoHandle {
     repo: Arc<ReadonlyRepo>,
     wc_commit_id: Option<CommitId>,
+    repo_path: std::path::PathBuf,
+    settings: UserSettings,
 }
 
 impl RepoHandle {
@@ -139,7 +141,12 @@ impl RepoHandle {
         let workspace_name = workspace.workspace_name();
         let wc_commit_id = repo.view().get_wc_commit_id(workspace_name).cloned();
 
-        Ok(Self { repo, wc_commit_id })
+        Ok(Self {
+            repo,
+            wc_commit_id,
+            repo_path: path.to_path_buf(),
+            settings,
+        })
     }
 
     /// Load jj settings using jj-cli's config system
@@ -377,6 +384,68 @@ impl RepoHandle {
             }
         }
         results
+    }
+
+    /// Update a commit's description
+    pub fn update_description(&mut self, commit_id: &str, new_description: &str) -> Result<()> {
+        use jj_lib::repo::Repo;
+
+        let commit_id = CommitId::try_from_hex(commit_id).context("Invalid commit ID hex")?;
+
+        // Re-open workspace for mutation
+        let store_factories = StoreFactories::default();
+        let working_copy_factories = default_working_copy_factories();
+
+        let workspace = Workspace::load(
+            &self.settings,
+            &self.repo_path,
+            &store_factories,
+            &working_copy_factories,
+        )
+        .context("Failed to load workspace for mutation")?;
+
+        // Get fresh repo
+        let repo = workspace
+            .repo_loader()
+            .load_at_head()
+            .context("Failed to load repository")?;
+
+        // Start a transaction
+        let mut tx = repo.start_transaction();
+
+        // Get the commit to rewrite
+        let store = repo.store();
+        let commit = store.get_commit(&commit_id)?;
+
+        // Rewrite the commit with new description
+        let new_commit = tx
+            .repo_mut()
+            .rewrite_commit(&commit)
+            .set_description(new_description)
+            .write()?;
+
+        // Record the rewrite
+        tx.repo_mut()
+            .set_rewritten_commit(commit.id().clone(), new_commit.id().clone());
+
+        // Rebase descendants if any
+        tx.repo_mut().rebase_descendants()?;
+
+        // Commit the transaction
+        tx.commit("Update commit description")
+            .context("Failed to commit transaction")?;
+
+        // Update our repo reference
+        self.repo = workspace
+            .repo_loader()
+            .load_at_head()
+            .context("Failed to reload repository")?;
+
+        // Update working copy commit ID
+        let workspace_name = workspace.workspace_name();
+        self.wc_commit_id = self.repo.view().get_wc_commit_id(workspace_name).cloned();
+
+        Ok(())
     }
 
     /// Get the diff for a specific file in a commit

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use iced::widget::{button, column, container, responsive, row, rule, scrollable, text};
 use iced::{Border, Element, Fill, Length, Theme};
 
+use crate::components::summary::DescriptionEditState;
 use crate::components::{diff, summary};
 use crate::jj::{CommitInfo, FileChange, FileDiff};
 use crate::settings::DiffSettings;
@@ -25,6 +26,7 @@ pub enum Message {
 pub struct RightPanel {
     pub active_tab: Tab,
     pub expanded_files: HashSet<String>,
+    pub description_edit: DescriptionEditState,
 }
 
 impl RightPanel {
@@ -32,10 +34,11 @@ impl RightPanel {
         Self {
             active_tab: Tab::Summary,
             expanded_files: HashSet::new(),
+            description_edit: DescriptionEditState::new(),
         }
     }
 
-    pub fn update(&mut self, message: Message) {
+    pub fn update(&mut self, message: Message, commit: Option<&CommitInfo>) {
         match message {
             Message::SwitchTab(tab) => {
                 self.active_tab = tab;
@@ -54,6 +57,20 @@ impl RightPanel {
                 summary::Message::ExpandAll => {
                     // Handled by repo_state since it has access to files
                 }
+                summary::Message::StartEditDescription => {
+                    if let Some(commit) = commit {
+                        self.description_edit.start_editing(&commit.description);
+                    }
+                }
+                summary::Message::DescriptionEditorAction(action) => {
+                    self.description_edit.content.perform(action);
+                }
+                summary::Message::CancelEditDescription => {
+                    self.description_edit.cancel();
+                }
+                summary::Message::SaveDescription => {
+                    // Handled by repo_state to perform the actual save
+                }
             },
         }
     }
@@ -67,6 +84,17 @@ impl RightPanel {
     pub fn clear(&mut self) {
         self.active_tab = Tab::Summary;
         self.expanded_files.clear();
+        self.description_edit.cancel();
+    }
+
+    /// Get the current description draft text (for saving)
+    pub fn get_description_draft(&self) -> String {
+        self.description_edit.get_text()
+    }
+
+    /// Called after description is saved successfully
+    pub fn description_saved(&mut self) {
+        self.description_edit.cancel();
     }
 
     pub fn view<'a>(
@@ -136,6 +164,7 @@ impl RightPanel {
                 files,
                 diffs,
                 &self.expanded_files,
+                &self.description_edit,
                 width,
                 settings,
                 theme,

@@ -1,4 +1,4 @@
-use iced::widget::{Column, button, column, container, row, scrollable, text};
+use iced::widget::{Column, button, column, container, row, scrollable, text, text_editor};
 use iced::{Element, Fill, Length, Theme};
 
 use crate::components::diff::view_file_diff_content;
@@ -11,6 +11,54 @@ pub enum Message {
     ToggleFile(String),
     CollapseAll,
     ExpandAll,
+    // Description editing
+    StartEditDescription,
+    DescriptionEditorAction(text_editor::Action),
+    SaveDescription,
+    CancelEditDescription,
+}
+
+/// State for description editing
+pub struct DescriptionEditState {
+    pub editing: bool,
+    pub content: text_editor::Content,
+    pub original: String,
+}
+
+impl DescriptionEditState {
+    pub fn new() -> Self {
+        Self {
+            editing: false,
+            content: text_editor::Content::new(),
+            original: String::new(),
+        }
+    }
+
+    pub fn start_editing(&mut self, description: &str) {
+        self.editing = true;
+        self.original = description.to_string();
+        self.content = text_editor::Content::with_text(description);
+    }
+
+    pub fn cancel(&mut self) {
+        self.editing = false;
+        self.content = text_editor::Content::new();
+        self.original.clear();
+    }
+
+    pub fn get_text(&self) -> String {
+        self.content.text()
+    }
+
+    pub fn has_changes(&self) -> bool {
+        self.content.text() != self.original
+    }
+}
+
+impl Default for DescriptionEditState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Render the commit summary view with collapsible file diffs
@@ -19,6 +67,7 @@ pub fn view<'a>(
     files: &'a [FileChange],
     diffs: &'a [FileDiff],
     expanded_files: &'a std::collections::HashSet<String>,
+    edit_state: &'a DescriptionEditState,
     width: f32,
     settings: &'a DiffSettings,
     theme: &'a Theme,
@@ -34,7 +83,7 @@ pub fn view<'a>(
         Some(commit) => {
             let content = column![
                 metadata_section(commit),
-                message_section(commit),
+                message_section(commit, edit_state),
                 files_section(files, diffs, expanded_files, width, settings, theme),
             ]
             .spacing(0);
@@ -112,18 +161,75 @@ fn bookmark_badge(name: String) -> Element<'static, Message> {
         .into()
 }
 
-fn message_section(commit: &CommitInfo) -> Element<'_, Message> {
-    let message = if commit.description.trim().is_empty() {
-        "(no description)".to_string()
-    } else {
-        commit.description.clone()
-    };
+fn message_section<'a>(
+    commit: &'a CommitInfo,
+    edit_state: &'a DescriptionEditState,
+) -> Element<'a, Message> {
+    if edit_state.editing {
+        // Edit mode: show text editor with save/cancel buttons
+        let editor = text_editor(&edit_state.content)
+            .on_action(Message::DescriptionEditorAction)
+            .height(Length::Fixed(120.0));
 
-    container(text(message).size(12))
-        .padding(12)
-        .width(Fill)
-        .style(container::bordered_box)
-        .into()
+        let has_changes = edit_state.has_changes();
+
+        let save_button = if has_changes {
+            button(text("Save").size(11))
+                .on_press(Message::SaveDescription)
+                .padding([4, 12])
+                .style(button::primary)
+        } else {
+            button(text("Save").size(11))
+                .padding([4, 12])
+                .style(button::secondary)
+        };
+
+        let cancel_button = button(text("Cancel").size(11))
+            .on_press(Message::CancelEditDescription)
+            .padding([4, 12])
+            .style(button::secondary);
+
+        let header = row![
+            text("Description").size(11).style(text::primary),
+            container(text("")).width(Fill),
+            save_button,
+            cancel_button,
+        ]
+        .spacing(8);
+
+        container(column![header, editor].spacing(8))
+            .padding(12)
+            .width(Fill)
+            .style(container::bordered_box)
+            .into()
+    } else {
+        // View mode: show description with edit button
+        let message = if commit.description.trim().is_empty() {
+            "(no description)".to_string()
+        } else {
+            commit.description.clone()
+        };
+
+        let edit_button = button(text("Edit").size(11))
+            .on_press(Message::StartEditDescription)
+            .padding([4, 12])
+            .style(button::text);
+
+        let header = row![
+            text("Description").size(11).style(text::primary),
+            container(text("")).width(Fill),
+            edit_button,
+        ]
+        .spacing(8);
+
+        let message_text = text(message).size(12);
+
+        container(column![header, message_text].spacing(8))
+            .padding(12)
+            .width(Fill)
+            .style(container::bordered_box)
+            .into()
+    }
 }
 
 fn files_section<'a>(

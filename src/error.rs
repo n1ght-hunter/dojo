@@ -26,6 +26,9 @@ pub enum DojoError {
 
     #[error("Config error: {0}")]
     Config(String),
+
+    #[error("Failed to update description: {0}")]
+    DescriptionUpdate(String),
 }
 
 impl From<anyhow::Error> for DojoError {

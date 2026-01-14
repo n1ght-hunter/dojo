@@ -34,6 +34,9 @@ pub enum Message {
     // User interactions
     SelectCommit(usize),
 
+    // Description editing
+    DescriptionSaved(Result<(), DojoError>),
+
     // Sub-component messages
     Sidebar(sidebar::Message),
     RightPanel(right_panel::Message),
@@ -158,14 +161,58 @@ impl RepoState {
             }
 
             Message::RightPanel(msg) => {
-                // Handle ExpandAll specially since it needs access to files
-                if let right_panel::Message::Summary(
-                    crate::components::summary::Message::ExpandAll,
-                ) = &msg
-                {
-                    self.right_panel.expand_all(&self.files);
-                } else {
-                    self.right_panel.update(msg);
+                let selected_commit = self.log_screen.selected_commit();
+
+                // Handle special cases that need repo_state access
+                match &msg {
+                    right_panel::Message::Summary(summary_msg) => match summary_msg {
+                        crate::components::summary::Message::ExpandAll => {
+                            self.right_panel.expand_all(&self.files);
+                            return Task::none();
+                        }
+                        crate::components::summary::Message::SaveDescription => {
+                            // Save description to repository
+                            if let Some(commit) = selected_commit {
+                                let new_description = self.right_panel.get_description_draft();
+                                let commit_id = commit.commit_id.clone();
+                                let handle = self.handle.clone();
+                                let path = self.path.clone();
+
+                                return Task::perform(
+                                    async move {
+                                        save_description(
+                                            handle,
+                                            &path,
+                                            &commit_id,
+                                            &new_description,
+                                        )
+                                        .await
+                                    },
+                                    Message::DescriptionSaved,
+                                );
+                            }
+                            return Task::none();
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+
+                self.right_panel.update(msg, selected_commit);
+                Task::none()
+            }
+
+            Message::DescriptionSaved(result) => {
+                match result {
+                    Ok(()) => {
+                        self.right_panel.description_saved();
+                        // Reload commits to get updated description
+                        let path = self.path.clone();
+                        return Self::load(path);
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                    }
                 }
                 Task::none()
             }
@@ -237,4 +284,19 @@ async fn load_batch_stats(
     commit_ids: Vec<String>,
 ) -> Result<Vec<(String, FileStats)>, DojoError> {
     Ok(handle.get_batch_stats(&commit_ids).await)
+}
+
+async fn save_description(
+    _handle: Option<Arc<RepoHandle>>,
+    path: &std::path::Path,
+    commit_id: &str,
+    new_description: &str,
+) -> Result<(), DojoError> {
+    // Need to open a fresh handle with mutable access
+    let mut handle =
+        RepoHandle::open(path).map_err(|e| DojoError::DescriptionUpdate(e.to_string()))?;
+
+    handle
+        .update_description(commit_id, new_description)
+        .map_err(|e| DojoError::DescriptionUpdate(e.to_string()))
 }
