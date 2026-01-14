@@ -2,8 +2,8 @@ use iced::widget::{column, container, row, text};
 use iced::{Element, Fill};
 
 use crate::Message;
+use crate::components::DiffViewer;
 use crate::jj::{CommitInfo, FileDiff};
-use crate::widgets::DiffViewer;
 
 /// Details pane showing information about a selected commit and its diffs
 pub struct DetailsPane {

@@ -1,9 +1,9 @@
-use iced::widget::{button, column, container, row, scrollable, text, Column};
+use iced::widget::{Column, button, column, container, row, scrollable, text};
 use iced::{Element, Fill, Length, Theme};
 
+use crate::components::diff::view_file_diff_content;
 use crate::jj::{ChangeKind, CommitInfo, FileChange, FileDiff};
 use crate::settings::DiffSettings;
-use crate::widgets::diff::view_file_diff_content;
 
 /// Messages for summary interactions
 #[derive(Debug, Clone)]
@@ -90,10 +90,12 @@ fn metadata_row(label: &str, value: String) -> Element<'_, Message> {
 }
 
 fn bookmarks_row(bookmarks: &[String]) -> Element<'_, Message> {
-    let mut bookmark_row = row![text("Bookmarks")
-        .size(11)
-        .style(text::primary)
-        .width(Length::Fixed(100.0)),]
+    let mut bookmark_row = row![
+        text("Bookmarks")
+            .size(11)
+            .style(text::primary)
+            .width(Length::Fixed(100.0)),
+    ]
     .spacing(8);
 
     for bookmark in bookmarks {
@@ -181,17 +183,26 @@ fn files_section<'a>(
     ]
     .spacing(8);
 
-    let mut content = column![container(header)
-        .padding([8, 12])
-        .width(Fill)
-        .style(container::bordered_box),]
+    let mut content = column![
+        container(header)
+            .padding([8, 12])
+            .width(Fill)
+            .style(container::bordered_box),
+    ]
     .spacing(0);
 
     // File dropdowns
     for file in files {
         let is_expanded = expanded_files.contains(&file.path);
         let diff = diffs.iter().find(|d| d.path == file.path);
-        content = content.push(file_dropdown(file, is_expanded, diff, width, settings, theme));
+        content = content.push(file_dropdown(
+            file,
+            is_expanded,
+            diff,
+            width,
+            settings,
+            theme,
+        ));
     }
 
     content.into()

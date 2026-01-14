@@ -1,18 +1,18 @@
+mod components;
 mod error;
 mod jj;
 mod repo_state;
 mod screens;
 mod settings;
-mod widgets;
 
 use std::path::PathBuf;
 
 use iced::widget::{center, column, container, text};
 use iced::{Element, Fill, Subscription, Task, Theme};
 
+use components::{PaneState, panes, tab_bar, toolbar};
 use repo_state::RepoState;
 use settings::Settings;
-use widgets::{PaneState, panes, tab_bar, toolbar};
 
 fn main() -> iced::Result {
     iced::application(boot, update, view)

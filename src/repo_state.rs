@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use iced::Task;
 
+use crate::components::{RightPanel, Sidebar, right_panel, sidebar};
 use crate::error::DojoError;
 use crate::jj::{CommitInfo, FileChange, FileDiff, RepoHandle};
 use crate::screens::LogScreen;
-use crate::widgets::{right_panel, sidebar, RightPanel, Sidebar};
 
 /// State for a single repository
 pub struct RepoState {
@@ -138,8 +138,9 @@ impl RepoState {
 
             Message::RightPanel(msg) => {
                 // Handle ExpandAll specially since it needs access to files
-                if let right_panel::Message::Summary(crate::widgets::summary::Message::ExpandAll) =
-                    &msg
+                if let right_panel::Message::Summary(
+                    crate::components::summary::Message::ExpandAll,
+                ) = &msg
                 {
                     self.right_panel.expand_all(&self.files);
                 } else {

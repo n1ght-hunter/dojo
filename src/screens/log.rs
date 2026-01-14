@@ -1,8 +1,8 @@
-use iced::widget::{column, container, mouse_area, row, scrollable, text, Row};
+use iced::widget::{Row, column, container, mouse_area, row, scrollable, text};
 use iced::{Element, Fill, Length};
 
+use crate::components::GraphColumn;
 use crate::jj::CommitInfo;
-use crate::widgets::GraphColumn;
 
 /// Row height must match the graph widget
 const ROW_HEIGHT: f32 = 30.0;
@@ -106,12 +106,20 @@ impl LogScreen {
         }
 
         // Author
-        content_row = content_row
-            .push(text(author).size(11).style(text::primary).width(Length::Fixed(100.0)));
+        content_row = content_row.push(
+            text(author)
+                .size(11)
+                .style(text::primary)
+                .width(Length::Fixed(100.0)),
+        );
 
         // Timestamp
-        content_row = content_row
-            .push(text(time_str).size(11).style(text::default).width(Length::Fixed(80.0)));
+        content_row = content_row.push(
+            text(time_str)
+                .size(11)
+                .style(text::default)
+                .width(Length::Fixed(80.0)),
+        );
 
         let content = content_row.height(Length::Fixed(ROW_HEIGHT));
 

@@ -1,9 +1,10 @@
-use iced::widget::{container, pane_grid};
+use dojo_widgets::pane_grid;
+use iced::widget::container;
 use iced::{Element, Fill, Size, Subscription, Theme};
 
+use crate::components::sidebar;
 use crate::repo_state::RepoState;
 use crate::settings::Settings;
-use crate::widgets::sidebar;
 
 /// Types of panes in the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,14 @@ impl PaneState {
         // Set initial ratios: sidebar ~15%, commit ~35%, right ~50%
         panes.resize(sidebar_split, 0.15);
         panes.resize(commit_split, 0.40);
+
+        // Set pane constraints - sidebar has min/max width
+        panes.set_constraints(
+            sidebar_pane,
+            pane_grid::PaneConstraints::new()
+                .min_width(100.0)
+                .max_width(400.0),
+        );
 
         Self {
             panes,
@@ -209,7 +218,7 @@ impl PaneState {
         theme: &'a Theme,
         map_sidebar: impl Fn(sidebar::Message) -> M + 'a + Clone,
         map_commit: impl Fn(usize) -> M + 'a + Clone,
-        map_right_panel: impl Fn(crate::widgets::right_panel::Message) -> M + 'a + Clone,
+        map_right_panel: impl Fn(crate::components::right_panel::Message) -> M + 'a + Clone,
         map_resize: impl Fn(Message) -> M + 'a,
     ) -> Element<'a, M> {
         let map_sidebar_clone = map_sidebar.clone();

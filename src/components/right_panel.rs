@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use iced::widget::{button, column, container, responsive, row, rule, scrollable, text};
 use iced::{Border, Element, Fill, Length, Theme};
 
+use crate::components::{diff, summary};
 use crate::jj::{CommitInfo, FileChange, FileDiff};
 use crate::settings::DiffSettings;
-use crate::widgets::{diff, summary};
 
 /// Tab types for the right panel
 #[derive(Debug, Clone, PartialEq)]
@@ -131,10 +131,16 @@ impl RightPanel {
         theme: &'a Theme,
     ) -> Element<'a, Message> {
         match &self.active_tab {
-            Tab::Summary => {
-                summary::view(commit, files, diffs, &self.expanded_files, width, settings, theme)
-                    .map(Message::Summary)
-            }
+            Tab::Summary => summary::view(
+                commit,
+                files,
+                diffs,
+                &self.expanded_files,
+                width,
+                settings,
+                theme,
+            )
+            .map(Message::Summary),
             Tab::File(path) => {
                 if let Some(file_diff) = diffs.iter().find(|d| &d.path == path) {
                     scrollable(diff::view_file_diff_content::<Message>(
