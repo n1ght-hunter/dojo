@@ -5,7 +5,7 @@ use iced::Task;
 
 use crate::components::{RightPanel, Sidebar, right_panel, sidebar};
 use crate::error::DojoError;
-use crate::jj::{CommitInfo, FileChange, FileDiff, RepoHandle};
+use crate::jj::{CommitInfo, FileChange, FileDiff, FileStats, RepoHandle};
 use crate::screens::LogScreen;
 
 /// State for a single repository
@@ -29,6 +29,7 @@ pub enum Message {
     Loaded(Result<(Arc<RepoHandle>, Vec<CommitInfo>), DojoError>),
     FilesLoaded(Result<Vec<FileChange>, DojoError>),
     DiffsLoaded(Result<Vec<FileDiff>, DojoError>),
+    StatsLoaded(Result<Vec<(String, FileStats)>, DojoError>),
 
     // User interactions
     SelectCommit(usize),
@@ -83,15 +84,24 @@ impl RepoState {
                 self.loading = false;
                 match result {
                     Ok((handle, commits)) => {
-                        self.handle = Some(handle);
+                        self.handle = Some(handle.clone());
                         self.error = None;
+
+                        // Collect commit IDs for stats loading
+                        let commit_ids: Vec<String> =
+                            commits.iter().map(|c| c.commit_id.clone()).collect();
+
                         self.log_screen.set_commits(commits);
 
-                        // Load files for first selected commit
+                        // Load files for first selected commit and stats for all commits
+                        let mut tasks = vec![self.load_stats(handle, commit_ids)];
+
                         if let Some(commit) = self.log_screen.selected_commit() {
                             let commit_id = commit.commit_id.clone();
-                            return self.load_commit_data(commit_id);
+                            tasks.push(self.load_commit_data(commit_id));
                         }
+
+                        return Task::batch(tasks);
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -125,6 +135,17 @@ impl RepoState {
                 match result {
                     Ok(diffs) => {
                         self.diffs = diffs;
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+
+            Message::StatsLoaded(result) => {
+                match result {
+                    Ok(stats) => {
+                        // Update commits with their stats
+                        self.log_screen.update_stats(stats);
                     }
                     Err(e) => self.error = Some(e),
                 }
@@ -168,6 +189,14 @@ impl RepoState {
             ),
         ])
     }
+
+    /// Load stats for all commits
+    fn load_stats(&self, handle: Arc<RepoHandle>, commit_ids: Vec<String>) -> Task<Message> {
+        Task::perform(
+            async move { load_batch_stats(handle, commit_ids).await },
+            Message::StatsLoaded,
+        )
+    }
 }
 
 // Helper functions for async loading
@@ -201,4 +230,11 @@ async fn load_diffs(
         }
     }
     Ok(diffs)
+}
+
+async fn load_batch_stats(
+    handle: Arc<RepoHandle>,
+    commit_ids: Vec<String>,
+) -> Result<Vec<(String, FileStats)>, DojoError> {
+    Ok(handle.get_batch_stats(&commit_ids).await)
 }

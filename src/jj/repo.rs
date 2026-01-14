@@ -18,6 +18,21 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 
+/// A parent edge with its type (direct or indirect/elided)
+#[derive(Debug, Clone)]
+pub struct ParentEdge {
+    pub commit_id: String,
+    pub is_indirect: bool, // True if there are elided commits between this and parent
+}
+
+/// Statistics about changed files in a commit
+#[derive(Debug, Clone, Default)]
+pub struct FileStats {
+    pub file_count: usize,
+    pub lines_added: usize,
+    pub lines_removed: usize,
+}
+
 /// Information about a single commit for display
 #[derive(Debug, Clone)]
 pub struct CommitInfo {
@@ -26,10 +41,12 @@ pub struct CommitInfo {
     pub description: String,
     pub author: String,
     pub timestamp: chrono::DateTime<chrono::FixedOffset>,
-    pub parent_ids: Vec<String>,
+    pub parent_ids: Vec<String>,       // Keep for compatibility
+    pub parent_edges: Vec<ParentEdge>, // New: includes edge type info
     pub is_working_copy: bool,
     pub is_immutable: bool,
     pub bookmarks: Vec<String>,
+    pub file_stats: Option<FileStats>, // Lazily loaded file statistics
 }
 
 /// Kind of file change
@@ -196,17 +213,23 @@ impl RepoHandle {
 
             let commit = store.get_commit(&commit_id)?;
 
-            // Get parent IDs from edges (respects graph structure)
-            let parent_ids: Vec<String> = edges
+            // Get parent edges from graph edges (respects graph structure)
+            let parent_edges: Vec<ParentEdge> = edges
                 .iter()
                 .filter(|e| {
                     e.edge_type == GraphEdgeType::Direct || e.edge_type == GraphEdgeType::Indirect
                 })
                 .filter(|e| &e.target != root_id)
-                .map(|e| e.target.hex())
+                .map(|e| ParentEdge {
+                    commit_id: e.target.hex(),
+                    is_indirect: e.edge_type == GraphEdgeType::Indirect,
+                })
                 .collect();
 
-            let info = self.commit_to_info_with_parents(&commit, parent_ids)?;
+            let parent_ids: Vec<String> =
+                parent_edges.iter().map(|e| e.commit_id.clone()).collect();
+
+            let info = self.commit_to_info_with_parents(&commit, parent_ids, parent_edges)?;
             commits.push(info);
         }
 
@@ -218,6 +241,7 @@ impl RepoHandle {
         &self,
         commit: &Commit,
         parent_ids: Vec<String>,
+        parent_edges: Vec<ParentEdge>,
     ) -> Result<CommitInfo> {
         let author_sig = commit.author();
 
@@ -260,9 +284,11 @@ impl RepoHandle {
             author: author_sig.name.clone(),
             timestamp,
             parent_ids,
+            parent_edges,
             is_working_copy: is_wc,
             is_immutable,
             bookmarks,
+            file_stats: None, // Loaded lazily
         })
     }
 
@@ -314,6 +340,43 @@ impl RepoHandle {
         }
 
         Ok(changes)
+    }
+
+    /// Get file statistics for a commit (file count, lines added/removed)
+    pub async fn get_commit_stats(&self, commit_id: &str) -> Result<FileStats> {
+        let files = self.get_changed_files(commit_id).await?;
+        let file_count = files.len();
+
+        let mut lines_added = 0;
+        let mut lines_removed = 0;
+
+        for file in &files {
+            let diff = self.get_file_diff(commit_id, &file.path).await?;
+            for line in &diff.lines {
+                match line {
+                    DiffLine::Added(_) => lines_added += 1,
+                    DiffLine::Removed(_) => lines_removed += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(FileStats {
+            file_count,
+            lines_added,
+            lines_removed,
+        })
+    }
+
+    /// Batch load stats for multiple commits
+    pub async fn get_batch_stats(&self, commit_ids: &[String]) -> Vec<(String, FileStats)> {
+        let mut results = Vec::new();
+        for id in commit_ids {
+            if let Ok(stats) = self.get_commit_stats(id).await {
+                results.push((id.clone(), stats));
+            }
+        }
+        results
     }
 
     /// Get the diff for a specific file in a commit

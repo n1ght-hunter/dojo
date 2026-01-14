@@ -1,4 +1,5 @@
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke, Text};
+use iced::mouse;
+use iced::widget::canvas::{self, Canvas, Event, Frame, Geometry, Path, Stroke, Text};
 use iced::{Color, Element, Font, Length, Point, Rectangle, Theme};
 use std::collections::HashMap;
 
@@ -6,12 +7,29 @@ use crate::jj::CommitInfo;
 
 /// Column spacing for graph lines
 const COLUMN_WIDTH: f32 = 18.0;
-/// Vertical spacing between commits
-const ROW_HEIGHT: f32 = 30.0;
+/// Vertical spacing between commits (two-line layout)
+const ROW_HEIGHT: f32 = 50.0;
 /// Node radius
 const NODE_RADIUS: f32 = 6.0;
 /// Font size for text
 const FONT_SIZE: f32 = 12.0;
+/// Smaller font size for secondary text
+const FONT_SIZE_SMALL: f32 = 11.0;
+/// Font size for stats
+const FONT_SIZE_STATS: f32 = 10.0;
+
+/// Vertical offset for line 1 (change_id, author, date)
+const LINE1_Y_OFFSET: f32 = 16.0;
+/// Vertical offset for line 2 (description, stats)
+const LINE2_Y_OFFSET: f32 = 36.0;
+/// Node Y offset (aligned with line 1)
+const NODE_Y_OFFSET: f32 = 16.0;
+
+/// State for the graph canvas (tracks hover)
+#[derive(Default, Debug, Clone)]
+pub struct GraphState {
+    hovered_row: Option<usize>,
+}
 
 /// A line in the graph with source and target coordinates
 /// Following GG's model: each line knows its full extent
@@ -47,6 +65,10 @@ struct GraphRow {
     author: String,
     timestamp: String,
     bookmarks: Vec<String>,
+    // File statistics (optional, loaded asynchronously)
+    file_count: Option<usize>,
+    lines_added: Option<usize>,
+    lines_removed: Option<usize>,
 }
 
 /// Graph and commit info canvas
@@ -55,6 +77,7 @@ pub struct GraphColumn {
     rows: Vec<GraphRow>,
     lines: Vec<GraphLine>,
     max_column: usize,
+    selected_index: Option<usize>,
 }
 
 impl GraphColumn {
@@ -63,6 +86,7 @@ impl GraphColumn {
             rows: Vec::new(),
             lines: Vec::new(),
             max_column: 0,
+            selected_index: None,
         }
     }
 
@@ -132,8 +156,10 @@ impl GraphColumn {
             }
 
             // Process parent edges - create stems for parents
-            for (i, parent_id) in commit.parent_ids.iter().enumerate() {
-                let indirect = false;
+            // Use parent_edges which includes the is_indirect flag for elided revisions
+            for (i, parent_edge) in commit.parent_edges.iter().enumerate() {
+                let parent_id = &parent_edge.commit_id;
+                let indirect = parent_edge.is_indirect;
 
                 // Check if parent already has a stem
                 let existing_stem = stems.iter().position(|s| {
@@ -196,20 +222,30 @@ impl GraphColumn {
                 }
             }
 
+            // Extract file stats from commit if available
+            let (file_count, lines_added, lines_removed) =
+                if let Some(ref stats) = commit.file_stats {
+                    (
+                        Some(stats.file_count),
+                        Some(stats.lines_added),
+                        Some(stats.lines_removed),
+                    )
+                } else {
+                    (None, None, None)
+                };
+
             self.rows.push(GraphRow {
                 column,
                 is_working_copy: commit.is_working_copy,
                 is_immutable: commit.is_immutable,
                 change_id: commit.change_id.chars().take(8).collect(),
-                description: commit
-                    .description
-                    .lines()
-                    .next()
-                    .unwrap_or("(no description)")
-                    .to_string(),
+                description: commit.description.lines().next().unwrap_or("").to_string(),
                 author: commit.author.clone(),
                 timestamp: commit.timestamp.format("%Y-%m-%d %H:%M").to_string(),
                 bookmarks: commit.bookmarks.clone(),
+                file_count,
+                lines_added,
+                lines_removed,
             });
         }
 
@@ -231,13 +267,20 @@ impl GraphColumn {
         (self.max_column as f32 + 2.0) * COLUMN_WIDTH
     }
 
-    pub fn view<M: 'static>(&self, _commits: &[CommitInfo]) -> Element<'_, M> {
+    pub fn set_selected(&mut self, index: Option<usize>) {
+        self.selected_index = index;
+    }
+
+    pub fn view(&self, _commits: &[CommitInfo]) -> Element<'_, usize> {
         let height = (self.rows.len() as f32) * ROW_HEIGHT;
 
-        Canvas::new(GraphRenderer { graph: self })
-            .width(Length::Fill)
-            .height(Length::Fixed(height))
-            .into()
+        Canvas::new(GraphRenderer {
+            graph: self,
+            selected_index: self.selected_index,
+        })
+        .width(Length::Fill)
+        .height(Length::Fixed(height))
+        .into()
     }
 }
 
@@ -249,6 +292,7 @@ impl Default for GraphColumn {
 
 struct GraphRenderer<'a> {
     graph: &'a GraphColumn,
+    selected_index: Option<usize>,
 }
 
 fn get_lane_colors(theme: &Theme) -> Vec<Color> {
@@ -263,16 +307,67 @@ fn get_lane_colors(theme: &Theme) -> Vec<Color> {
     ]
 }
 
-impl<M> canvas::Program<M> for GraphRenderer<'_> {
-    type State = ();
+/// Get the row index at a given y position
+fn row_at_position(y: f32, num_rows: usize) -> Option<usize> {
+    if y < 0.0 {
+        return None;
+    }
+    let row = (y / ROW_HEIGHT) as usize;
+    if row < num_rows { Some(row) } else { None }
+}
+
+impl canvas::Program<usize> for GraphRenderer<'_> {
+    type State = GraphState;
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<usize>> {
+        let cursor_position = cursor.position_in(bounds);
+
+        match event {
+            Event::Mouse(mouse_event) => match mouse_event {
+                mouse::Event::CursorMoved { .. } => {
+                    // Update hovered row
+                    let new_hovered = cursor_position
+                        .and_then(|pos| row_at_position(pos.y, self.graph.rows.len()));
+
+                    if new_hovered != state.hovered_row {
+                        state.hovered_row = new_hovered;
+                        // Request redraw when hover changes
+                        return Some(canvas::Action::request_redraw());
+                    }
+                    None
+                }
+                mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                    // Handle click - select the row
+                    if let Some(pos) = cursor_position {
+                        if let Some(row_idx) = row_at_position(pos.y, self.graph.rows.len()) {
+                            return Some(canvas::Action::publish(row_idx));
+                        }
+                    }
+                    None
+                }
+                mouse::Event::CursorLeft => {
+                    state.hovered_row = None;
+                    Some(canvas::Action::request_redraw())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &iced::Renderer,
         theme: &Theme,
         bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
+        _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
         let mut frame = Frame::new(renderer, bounds.size());
         let palette = theme.extended_palette();
@@ -282,30 +377,95 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
 
         let text_start_x = self.graph.graph_width().max(COLUMN_WIDTH * 3.0);
 
+        // Draw row backgrounds first (selection and hover highlights)
+        for (row_idx, _row) in self.graph.rows.iter().enumerate() {
+            let row_top = row_idx as f32 * ROW_HEIGHT;
+
+            let is_selected = self.selected_index == Some(row_idx);
+            let is_hovered = state.hovered_row == Some(row_idx) && !is_selected;
+
+            if is_selected {
+                // Selected row - primary color background
+                let bg_color = Color {
+                    a: 0.3,
+                    ..palette.primary.weak.color
+                };
+                let bg_rect = Path::rectangle(
+                    Point::new(0.0, row_top),
+                    iced::Size::new(bounds.width, ROW_HEIGHT),
+                );
+                frame.fill(&bg_rect, bg_color);
+            } else if is_hovered {
+                // Hovered row - subtle background
+                let bg_color = Color {
+                    a: 0.15,
+                    ..palette.background.weak.text
+                };
+                let bg_rect = Path::rectangle(
+                    Point::new(0.0, row_top),
+                    iced::Size::new(bounds.width, ROW_HEIGHT),
+                );
+                frame.fill(&bg_rect, bg_color);
+            }
+        }
+
         // Draw all lines
         for line in &self.graph.lines {
             let source_x = (line.source_col as f32 + 0.5) * COLUMN_WIDTH;
-            let source_y = (line.source_row as f32) * ROW_HEIGHT + 21.0; // Below node center
+            // Below node center (adjusted for new row height)
+            let source_y =
+                (line.source_row as f32) * ROW_HEIGHT + NODE_Y_OFFSET + NODE_RADIUS + 4.0;
             let target_x = (line.target_col as f32 + 0.5) * COLUMN_WIDTH;
-            let target_y = (line.target_row as f32) * ROW_HEIGHT + 9.0; // Above node center (or bottom)
+            // Above node center (adjusted for new row height)
+            let target_y =
+                (line.target_row as f32) * ROW_HEIGHT + NODE_Y_OFFSET - NODE_RADIUS - 4.0;
 
             let color = lane_colors[line.target_col % lane_colors.len()];
-            let stroke = Stroke::default()
-                .with_color(color)
-                .with_width(if line.indirect { 1.5 } else { 2.0 });
+            let stroke = Stroke::default().with_color(color).with_width(2.0);
 
             if line.is_vertical() {
-                // Straight vertical line
-                let path = Path::line(
-                    Point::new(source_x, source_y),
-                    Point::new(target_x, target_y),
-                );
-                frame.stroke(&path, stroke);
+                if line.indirect {
+                    // Indirect line (elided revisions) - draw dashed with ~ symbol
+                    // Draw short segment from source
+                    let gap_start = source_y + 4.0;
+                    let gap_end = source_y + 16.0;
+
+                    let path1 = Path::line(
+                        Point::new(source_x, source_y),
+                        Point::new(source_x, gap_start),
+                    );
+                    frame.stroke(&path1, stroke.clone());
+
+                    // Draw ~ symbol for elided revisions
+                    let tilde = Text {
+                        content: "~".to_string(),
+                        position: Point::new(source_x - 4.0, gap_start),
+                        color,
+                        size: FONT_SIZE.into(),
+                        font: Font::MONOSPACE,
+                        ..Text::default()
+                    };
+                    frame.fill_text(tilde);
+
+                    // Continue line after gap
+                    let path2 = Path::line(
+                        Point::new(target_x, gap_end),
+                        Point::new(target_x, target_y),
+                    );
+                    frame.stroke(&path2, stroke);
+                } else {
+                    // Straight vertical line
+                    let path = Path::line(
+                        Point::new(source_x, source_y),
+                        Point::new(target_x, target_y),
+                    );
+                    frame.stroke(&path, stroke);
+                }
             } else {
                 // Curved line (merge/fork)
                 let c1 = line.source_col;
                 let c2 = line.target_col;
-                let mid_y = source_y + 9.0;
+                let mid_y = source_y + 12.0;
                 let radius = 6.0;
                 let dir = if c2 > c1 { 1.0 } else { -1.0 };
 
@@ -334,12 +494,26 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
                     builder.line_to(Point::new(target_x, target_y));
                 });
                 frame.stroke(&path, stroke);
+
+                // If indirect, draw ~ symbol at the start of the curve
+                if line.indirect {
+                    let tilde = Text {
+                        content: "~".to_string(),
+                        position: Point::new(source_x - 4.0, source_y + 2.0),
+                        color,
+                        size: FONT_SIZE.into(),
+                        font: Font::MONOSPACE,
+                        ..Text::default()
+                    };
+                    frame.fill_text(tilde);
+                }
             }
         }
 
         // Draw nodes and text on top
         for (row_idx, row) in self.graph.rows.iter().enumerate() {
-            let y = (row_idx as f32 + 0.5) * ROW_HEIGHT;
+            let row_top = row_idx as f32 * ROW_HEIGHT;
+            let node_y = row_top + NODE_Y_OFFSET;
             let node_x = (row.column as f32 + 0.5) * COLUMN_WIDTH;
 
             let node_color = if row.is_working_copy {
@@ -348,7 +522,7 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
                 lane_colors[row.column % lane_colors.len()]
             };
 
-            let node = Path::circle(Point::new(node_x, y), NODE_RADIUS);
+            let node = Path::circle(Point::new(node_x, node_y), NODE_RADIUS);
 
             if row.is_immutable {
                 frame.fill(&node, node_color);
@@ -358,18 +532,19 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
                 frame.stroke(&node, outline);
 
                 if row.is_working_copy {
-                    let inner = Path::circle(Point::new(node_x, y), NODE_RADIUS * 0.5);
+                    let inner = Path::circle(Point::new(node_x, node_y), NODE_RADIUS * 0.5);
                     frame.fill(&inner, palette.success.strong.color);
                 }
             }
 
-            // Draw text
+            // ===== LINE 1: change_id, bookmarks, author, date =====
+            let line1_y = row_top + LINE1_Y_OFFSET - FONT_SIZE * 0.4;
             let mut text_x = text_start_x;
-            let text_y = y - FONT_SIZE * 0.4;
 
+            // Change ID (colored by lane)
             let change_id_text = Text {
                 content: row.change_id.clone(),
-                position: Point::new(text_x, text_y),
+                position: Point::new(text_x, line1_y),
                 color: node_color,
                 size: FONT_SIZE.into(),
                 font: Font::MONOSPACE,
@@ -378,11 +553,12 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
             frame.fill_text(change_id_text);
             text_x += 75.0;
 
+            // Bookmarks (if any)
             if !row.bookmarks.is_empty() {
                 let bookmark_str = row.bookmarks.join(", ");
                 let bookmark_text = Text {
                     content: bookmark_str.clone(),
-                    position: Point::new(text_x, text_y),
+                    position: Point::new(text_x, line1_y),
                     color: palette.primary.strong.color,
                     size: FONT_SIZE.into(),
                     font: Font::default(),
@@ -392,49 +568,120 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
                 text_x += (bookmark_str.chars().count() as f32 * 7.0).min(150.0) + 10.0;
             }
 
-            let max_desc_width = bounds.width - text_x - 220.0;
+            // Author name (after bookmarks)
+            let author_text = Text {
+                content: row.author.clone(),
+                position: Point::new(text_x, line1_y),
+                color: secondary_text,
+                size: FONT_SIZE_SMALL.into(),
+                font: Font::default(),
+                ..Text::default()
+            };
+            frame.fill_text(author_text);
+
+            // Date (right-aligned on line 1)
+            let date_x = bounds.width - 120.0;
+            let date_text = Text {
+                content: row.timestamp.clone(),
+                position: Point::new(date_x, line1_y),
+                color: secondary_text,
+                size: FONT_SIZE_SMALL.into(),
+                font: Font::default(),
+                ..Text::default()
+            };
+            frame.fill_text(date_text);
+
+            // ===== LINE 2: description, file stats =====
+            let line2_y = row_top + LINE2_Y_OFFSET - FONT_SIZE * 0.4;
+
+            // Description (left side, starting at text_start_x)
+            let desc_x = text_start_x;
+            let max_desc_width = bounds.width - desc_x - 150.0; // Leave room for stats
             let max_chars = (max_desc_width / 7.0) as usize;
-            let char_count = row.description.chars().count();
-            let desc = if char_count > max_chars && max_chars > 3 {
-                let truncated: String = row.description.chars().take(max_chars - 3).collect();
-                format!("{}...", truncated)
+
+            let (desc, desc_color) = if row.description.is_empty() {
+                ("(no description)".to_string(), secondary_text)
             } else {
-                row.description.clone()
+                let char_count = row.description.chars().count();
+                let truncated = if char_count > max_chars && max_chars > 3 {
+                    let t: String = row.description.chars().take(max_chars - 3).collect();
+                    format!("{}...", t)
+                } else {
+                    row.description.clone()
+                };
+                (truncated, text_color)
             };
 
             let desc_text = Text {
                 content: desc,
-                position: Point::new(text_x, text_y),
-                color: text_color,
+                position: Point::new(desc_x, line2_y),
+                color: desc_color,
                 size: FONT_SIZE.into(),
                 font: Font::default(),
                 ..Text::default()
             };
             frame.fill_text(desc_text);
 
-            let right_x = bounds.width - 200.0;
+            // File stats (right-aligned on line 2)
+            if let (Some(file_count), Some(removed), Some(added)) =
+                (row.file_count, row.lines_removed, row.lines_added)
+            {
+                let stats_x = bounds.width - 120.0;
 
-            let author_text = Text {
-                content: row.author.clone(),
-                position: Point::new(right_x, text_y),
-                color: secondary_text,
-                size: (FONT_SIZE - 1.0).into(),
-                font: Font::default(),
-                ..Text::default()
-            };
-            frame.fill_text(author_text);
+                // "N files" text
+                let files_str = format!(
+                    "{} file{}",
+                    file_count,
+                    if file_count == 1 { "" } else { "s" }
+                );
+                let files_text = Text {
+                    content: files_str,
+                    position: Point::new(stats_x, line2_y),
+                    color: secondary_text,
+                    size: FONT_SIZE_STATS.into(),
+                    font: Font::default(),
+                    ..Text::default()
+                };
+                frame.fill_text(files_text);
 
-            let date_text = Text {
-                content: row.timestamp.clone(),
-                position: Point::new(right_x + 100.0, text_y),
-                color: secondary_text,
-                size: (FONT_SIZE - 1.0).into(),
-                font: Font::default(),
-                ..Text::default()
-            };
-            frame.fill_text(date_text);
+                // "-X" removed (red/danger color)
+                let removed_text = Text {
+                    content: format!("-{}", removed),
+                    position: Point::new(stats_x + 50.0, line2_y),
+                    color: palette.danger.base.color,
+                    size: FONT_SIZE_STATS.into(),
+                    font: Font::MONOSPACE,
+                    ..Text::default()
+                };
+                frame.fill_text(removed_text);
+
+                // "+Y" added (green/success color)
+                let added_text = Text {
+                    content: format!("+{}", added),
+                    position: Point::new(stats_x + 80.0, line2_y),
+                    color: palette.success.base.color,
+                    size: FONT_SIZE_STATS.into(),
+                    font: Font::MONOSPACE,
+                    ..Text::default()
+                };
+                frame.fill_text(added_text);
+            }
         }
 
         vec![frame.into_geometry()]
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &Self::State,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if let Some(pos) = cursor.position_in(bounds) {
+            if row_at_position(pos.y, self.graph.rows.len()).is_some() {
+                return mouse::Interaction::Pointer;
+            }
+        }
+        mouse::Interaction::default()
     }
 }
