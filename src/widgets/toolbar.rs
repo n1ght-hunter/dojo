@@ -1,9 +1,10 @@
-use iced::widget::{button, container, row, text, Space};
+use iced::widget::{Space, button, container, row, text};
 use iced::{Element, Fill, Length};
 
-/// Messages for toolbar interactions (placeholder - not yet implemented)
+/// Messages for toolbar interactions
 #[derive(Debug, Clone)]
 pub enum Message {
+    ToggleSidebar,
     Back,
     Forward,
     Menu,
@@ -14,14 +15,16 @@ pub enum Message {
     Push,
 }
 
-/// Render the toolbar (placeholder buttons - visual only for now)
-pub fn view<'a>(current_bookmark: Option<&'a str>) -> Element<'a, Message> {
+/// Render the toolbar
+pub fn view<'a>(current_bookmark: Option<&'a str>, sidebar_open: bool) -> Element<'a, Message> {
     let bookmark_name = current_bookmark.unwrap_or("main");
 
+    let sidebar_icon = if sidebar_open { "◀" } else { "▶" };
+
     let left_section = row![
-        toolbar_button("☐", Message::Menu),
-        toolbar_button("◀", Message::Back),
-        toolbar_button("▶", Message::Forward),
+        toolbar_button(sidebar_icon, Message::ToggleSidebar),
+        toolbar_button("←", Message::Back),
+        toolbar_button("→", Message::Forward),
     ]
     .spacing(2);
 
