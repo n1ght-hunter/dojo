@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use jj_lib::diff::{ContentDiff, DiffHunkKind};
 use jj_cli::config::{ConfigEnv, config_from_environment, default_config_layers};
 use jj_lib::backend::CommitId;
 use jj_lib::commit::Commit;
 use jj_lib::config::{ConfigLayer, ConfigSource};
+use jj_lib::diff::{ContentDiff, DiffHunkKind};
+use jj_lib::graph::{GraphEdgeType, TopoGroupedGraphIterator};
 use jj_lib::matchers::EverythingMatcher;
 use jj_lib::merged_tree::TreeDiffEntry;
 use jj_lib::object_id::ObjectId;
 use jj_lib::repo::{ReadonlyRepo, Repo, StoreFactories};
+use jj_lib::revset::{RevsetExpression, SymbolResolver, SymbolResolverExtension};
 use jj_lib::settings::UserSettings;
 use jj_lib::store::Store;
 use jj_lib::workspace::{Workspace, default_working_copy_factories};
@@ -26,6 +28,7 @@ pub struct CommitInfo {
     pub timestamp: chrono::DateTime<chrono::FixedOffset>,
     pub parent_ids: Vec<String>,
     pub is_working_copy: bool,
+    pub is_immutable: bool,
     pub bookmarks: Vec<String>,
 }
 
@@ -157,24 +160,110 @@ impl RepoHandle {
         Ok(settings)
     }
 
-    /// Get the log of commits
+    /// Get the log of commits using jj's graph iterator (like GG)
     pub fn log(&self, limit: usize) -> Result<Vec<CommitInfo>> {
-        let mut commits = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        // Use all() revset - shows all commits in topological order
+        let expression = RevsetExpression::all();
 
-        // Get all heads and walk backwards
-        for head_id in self.repo.view().heads().iter() {
-            self.collect_commits(head_id, &mut commits, &mut seen, limit)?;
-            if commits.len() >= limit {
-                break;
+        // Create a simple symbol resolver with no extensions
+        let extensions: &[Arc<dyn SymbolResolverExtension>] = &[];
+        let symbol_resolver = SymbolResolver::new(self.repo.as_ref(), extensions);
+
+        let resolved = expression
+            .resolve_user_expression(self.repo.as_ref(), &symbol_resolver)
+            .context("Failed to resolve revset")?;
+
+        let revset = resolved
+            .evaluate(self.repo.as_ref())
+            .context("Failed to evaluate revset")?;
+
+        // Use TopoGroupedGraphIterator like GG does for proper topological ordering
+        let iter = revset.iter_graph();
+        let as_id: for<'a> fn(&'a CommitId) -> &'a CommitId = |id| id;
+        let topo_iter = TopoGroupedGraphIterator::new(iter, as_id);
+
+        let mut commits = Vec::new();
+        let store = self.repo.store();
+        let root_id = store.root_commit_id();
+
+        for item in topo_iter.take(limit) {
+            let (commit_id, edges) = item?;
+
+            // Skip the root commit
+            if &commit_id == root_id {
+                continue;
             }
+
+            let commit = store.get_commit(&commit_id)?;
+
+            // Get parent IDs from edges (respects graph structure)
+            let parent_ids: Vec<String> = edges
+                .iter()
+                .filter(|e| {
+                    e.edge_type == GraphEdgeType::Direct || e.edge_type == GraphEdgeType::Indirect
+                })
+                .filter(|e| &e.target != root_id)
+                .map(|e| e.target.hex())
+                .collect();
+
+            let info = self.commit_to_info_with_parents(&commit, parent_ids)?;
+            commits.push(info);
         }
 
-        // Sort by timestamp descending
-        commits.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        commits.truncate(limit);
-
         Ok(commits)
+    }
+
+    /// Convert commit to info with explicit parent IDs (from graph edges)
+    fn commit_to_info_with_parents(
+        &self,
+        commit: &Commit,
+        parent_ids: Vec<String>,
+    ) -> Result<CommitInfo> {
+        let author_sig = commit.author();
+
+        // Convert timestamp
+        let millis = author_sig.timestamp.timestamp.0;
+        let tz_offset_secs = author_sig.timestamp.tz_offset * 60;
+        let offset = chrono::FixedOffset::east_opt(tz_offset_secs)
+            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
+        let timestamp = chrono::DateTime::from_timestamp_millis(millis)
+            .unwrap_or_default()
+            .with_timezone(&offset);
+
+        let is_wc = self
+            .wc_commit_id
+            .as_ref()
+            .map(|wc| wc == commit.id())
+            .unwrap_or(false);
+
+        // Get bookmarks pointing to this commit
+        let bookmarks: Vec<String> = self
+            .repo
+            .view()
+            .bookmarks()
+            .filter_map(|(name, target)| {
+                if target.local_target.added_ids().any(|id| id == commit.id()) {
+                    Some(name.as_str().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Check if commit is immutable (has description and is not working copy)
+        let is_immutable = !is_wc && !commit.description().is_empty();
+
+        Ok(CommitInfo {
+            commit_id: commit.id().hex(),
+            change_id: commit.change_id().hex(),
+            description: commit.description().to_string(),
+            author: author_sig.name.clone(),
+            timestamp,
+            parent_ids,
+            is_working_copy: is_wc,
+            is_immutable,
+            bookmarks,
+        })
     }
 
     /// Get the changed files for a commit (compared to its first parent)
@@ -452,82 +541,6 @@ impl RepoHandle {
 
         result.reverse();
         result
-    }
-
-    fn collect_commits(
-        &self,
-        commit_id: &CommitId,
-        commits: &mut Vec<CommitInfo>,
-        seen: &mut std::collections::HashSet<String>,
-        limit: usize,
-    ) -> Result<()> {
-        if commits.len() >= limit {
-            return Ok(());
-        }
-
-        let id_hex = commit_id.hex();
-        if seen.contains(&id_hex) {
-            return Ok(());
-        }
-        seen.insert(id_hex.clone());
-
-        let store = self.repo.store();
-        let commit = store.get_commit(commit_id)?;
-
-        let info = self.commit_to_info(&commit)?;
-        let parent_ids: Vec<CommitId> = commit.parent_ids().to_vec();
-        commits.push(info);
-
-        // Recurse into parents
-        for parent_id in parent_ids {
-            self.collect_commits(&parent_id, commits, seen, limit)?;
-        }
-
-        Ok(())
-    }
-
-    fn commit_to_info(&self, commit: &Commit) -> Result<CommitInfo> {
-        let author_sig = commit.author();
-
-        // Convert timestamp
-        let millis = author_sig.timestamp.timestamp.0;
-        let tz_offset_secs = author_sig.timestamp.tz_offset * 60;
-        let offset = chrono::FixedOffset::east_opt(tz_offset_secs)
-            .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).unwrap());
-        let timestamp = chrono::DateTime::from_timestamp_millis(millis)
-            .unwrap_or_default()
-            .with_timezone(&offset);
-
-        let is_wc = self
-            .wc_commit_id
-            .as_ref()
-            .map(|wc| wc == commit.id())
-            .unwrap_or(false);
-
-        // Get bookmarks pointing to this commit
-        let bookmarks: Vec<String> = self
-            .repo
-            .view()
-            .bookmarks()
-            .filter_map(|(name, target)| {
-                if target.local_target.added_ids().any(|id| id == commit.id()) {
-                    Some(name.as_str().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(CommitInfo {
-            commit_id: commit.id().hex(),
-            change_id: commit.change_id().hex(),
-            description: commit.description().to_string(),
-            author: author_sig.name.clone(),
-            timestamp,
-            parent_ids: commit.parent_ids().iter().map(|id| id.hex()).collect(),
-            is_working_copy: is_wc,
-            bookmarks,
-        })
     }
 }
 

@@ -1,188 +1,241 @@
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke};
-use iced::{Color, Element, Length, Point, Rectangle, Theme};
+use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path, Stroke, Text};
+use iced::{Color, Element, Font, Length, Point, Rectangle, Theme};
+use std::collections::HashMap;
 
 use crate::jj::CommitInfo;
 
 /// Column spacing for graph lines
-const COLUMN_WIDTH: f32 = 20.0;
+const COLUMN_WIDTH: f32 = 18.0;
 /// Vertical spacing between commits
 const ROW_HEIGHT: f32 = 30.0;
 /// Node radius
-const NODE_RADIUS: f32 = 5.0;
+const NODE_RADIUS: f32 = 6.0;
+/// Font size for text
+const FONT_SIZE: f32 = 12.0;
 
-/// Graph column state for rendering
-#[derive(Debug, Clone)]
-pub struct GraphColumn {
-    /// Computed graph data for each commit
-    graph_data: Vec<GraphRow>,
-}
-
-#[derive(Debug, Clone)]
-struct GraphRow {
-    /// Column position of this commit's node
-    node_column: usize,
-    /// Lines to draw: (from_column, to_column, color_index)
-    lines: Vec<GraphLine>,
-    /// Whether this is the working copy commit
-    is_working_copy: bool,
-}
-
+/// A line in the graph with source and target coordinates
+/// Following GG's model: each line knows its full extent
 #[derive(Debug, Clone)]
 struct GraphLine {
-    from_column: usize,
-    to_column: usize,
-    color_index: usize,
-    line_type: LineType,
+    source_col: usize,
+    source_row: usize,
+    target_col: usize,
+    target_row: usize, // Row where line ends (may be beyond displayed commits)
+    indirect: bool,
 }
 
+impl GraphLine {
+    /// Check if this line passes through the given row
+    fn passes_row(&self, row: usize) -> bool {
+        row >= self.source_row && row < self.target_row
+    }
+
+    /// Check if this line is vertical (same column)
+    fn is_vertical(&self) -> bool {
+        self.source_col == self.target_col
+    }
+}
+
+/// A row in the graph display
 #[derive(Debug, Clone)]
-enum LineType {
-    /// Straight vertical line
-    Vertical,
-    /// Curve from node to parent
-    ToParent,
-    /// Continuation from previous row
-    Continuation,
+struct GraphRow {
+    column: usize,
+    is_working_copy: bool,
+    is_immutable: bool,
+    change_id: String,
+    description: String,
+    author: String,
+    timestamp: String,
+    bookmarks: Vec<String>,
+}
+
+/// Graph and commit info canvas
+#[derive(Debug, Clone)]
+pub struct GraphColumn {
+    rows: Vec<GraphRow>,
+    lines: Vec<GraphLine>,
+    max_column: usize,
 }
 
 impl GraphColumn {
     pub fn new() -> Self {
         Self {
-            graph_data: Vec::new(),
+            rows: Vec::new(),
+            lines: Vec::new(),
+            max_column: 0,
         }
     }
 
     /// Compute the graph layout from commits
+    /// Based on GG's algorithm: track stems, create lines with full coordinates
     pub fn compute(&mut self, commits: &[CommitInfo]) {
-        self.graph_data.clear();
+        self.rows.clear();
+        self.lines.clear();
+        self.max_column = 0;
 
         if commits.is_empty() {
             return;
         }
 
-        // Build a map from commit_id to row index
-        let mut commit_to_row: std::collections::HashMap<&str, usize> =
-            std::collections::HashMap::new();
-        for (i, commit) in commits.iter().enumerate() {
-            commit_to_row.insert(&commit.commit_id, i);
+        let num_rows = commits.len();
+
+        // Build commit_id -> row index map
+        let commit_to_row: HashMap<&str, usize> = commits
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.commit_id.as_str(), i))
+            .collect();
+
+        // Stems: ongoing vertical lines waiting for a commit
+        // Each stem tracks: source coordinates, target commit, column
+        struct Stem {
+            source_col: usize,
+            source_row: usize,
+            target_id: String,
+            indirect: bool,
         }
 
-        // Track active lanes: lane_index -> commit_id being tracked
-        let mut active_lanes: Vec<Option<String>> = Vec::new();
+        let mut stems: Vec<Option<Stem>> = Vec::new();
 
-        for (_row_idx, commit) in commits.iter().enumerate() {
-            let mut row = GraphRow {
-                node_column: 0,
-                lines: Vec::new(),
-                is_working_copy: commit.is_working_copy,
-            };
-
-            // Find or create a lane for this commit
-            let node_column = if let Some(col) = active_lanes.iter().position(|lane| {
-                lane.as_ref()
-                    .map(|id| id == &commit.commit_id)
+        for (row_idx, commit) in commits.iter().enumerate() {
+            // Find stem targeting this commit
+            let targeting_stem = stems.iter().position(|s| {
+                s.as_ref()
+                    .map(|stem| stem.target_id == commit.commit_id)
                     .unwrap_or(false)
-            }) {
-                // Found an existing lane tracking this commit
-                col
+            });
+
+            let column = if let Some(slot) = targeting_stem {
+                slot
             } else {
-                // Need a new lane - find first empty or create new
-                if let Some(col) = active_lanes.iter().position(|lane| lane.is_none()) {
-                    col
-                } else {
-                    active_lanes.push(None);
-                    active_lanes.len() - 1
-                }
+                // Find first empty slot or append
+                stems.iter().position(|s| s.is_none()).unwrap_or_else(|| {
+                    stems.push(None);
+                    stems.len() - 1
+                })
             };
 
-            row.node_column = node_column;
-
-            // Draw continuation lines for all active lanes
-            for (col, lane) in active_lanes.iter().enumerate() {
-                if lane.is_some() && col != node_column {
-                    row.lines.push(GraphLine {
-                        from_column: col,
-                        to_column: col,
-                        color_index: col,
-                        line_type: LineType::Continuation,
-                    });
-                }
+            // Ensure stems vector is large enough
+            while stems.len() <= column {
+                stems.push(None);
             }
 
-            // Clear the current lane (node will be drawn here)
-            active_lanes[node_column] = None;
+            // If there was a stem targeting this commit, create a line from it
+            if let Some(terminated) = stems[column].take() {
+                self.lines.push(GraphLine {
+                    source_col: terminated.source_col,
+                    source_row: terminated.source_row,
+                    target_col: column,
+                    target_row: row_idx,
+                    indirect: terminated.indirect,
+                });
+            }
 
-            // Handle parents
-            for (parent_idx, parent_id) in commit.parent_ids.iter().enumerate() {
-                // Check if this parent appears later in our commit list
-                let parent_row = commit_to_row.get(parent_id.as_str());
+            // Process parent edges - create stems for parents
+            for (i, parent_id) in commit.parent_ids.iter().enumerate() {
+                let indirect = false;
 
-                if parent_row.is_some() {
-                    // Find or create a lane for this parent
-                    let parent_column = if parent_idx == 0 {
-                        // First parent takes the same column
-                        node_column
-                    } else {
-                        // Additional parents need new lanes
-                        if let Some(col) = active_lanes.iter().position(|lane| lane.is_none()) {
-                            col
+                // Check if parent already has a stem
+                let existing_stem = stems.iter().position(|s| {
+                    s.as_ref()
+                        .map(|stem| &stem.target_id == parent_id)
+                        .unwrap_or(false)
+                });
+
+                if let Some(stem_col) = existing_stem {
+                    // Parent already has a stem - create intersection line to it
+                    // The line goes from this node down to the next row in that column
+                    if stem_col != column {
+                        // Find where this parent actually is (or use last row if not displayed)
+                        let parent_row = commit_to_row
+                            .get(parent_id.as_str())
+                            .copied()
+                            .unwrap_or(num_rows);
+
+                        self.lines.push(GraphLine {
+                            source_col: column,
+                            source_row: row_idx,
+                            target_col: stem_col,
+                            target_row: parent_row,
+                            indirect,
+                        });
+                    }
+                } else {
+                    // Create new stem for this parent
+                    let stem_col =
+                        if i == 0 && stems.get(column).map(|s| s.is_none()).unwrap_or(true) {
+                            // First parent: use same column if available
+                            column
                         } else {
-                            active_lanes.push(None);
-                            active_lanes.len() - 1
-                        }
-                    };
+                            // Additional parents: append new column
+                            stems.push(None);
+                            stems.len() - 1
+                        };
 
-                    // Mark this lane as tracking the parent
-                    if parent_column < active_lanes.len() {
-                        active_lanes[parent_column] = Some(parent_id.clone());
+                    while stems.len() <= stem_col {
+                        stems.push(None);
                     }
 
-                    // Draw line from node to parent lane
-                    row.lines.push(GraphLine {
-                        from_column: node_column,
-                        to_column: parent_column,
-                        color_index: parent_column,
-                        line_type: if node_column == parent_column {
-                            LineType::Vertical
-                        } else {
-                            LineType::ToParent
-                        },
+                    stems[stem_col] = Some(Stem {
+                        source_col: column,
+                        source_row: row_idx,
+                        target_id: parent_id.clone(),
+                        indirect,
                     });
+
+                    // If stem goes to different column, it's a merge line
+                    // The vertical part will be drawn by the stem continuing down
                 }
             }
 
-            // Compact lanes by removing trailing empty ones
-            while active_lanes.last().map(|l| l.is_none()).unwrap_or(false) {
-                active_lanes.pop();
+            // Track max column
+            self.max_column = self.max_column.max(column);
+            for (i, stem) in stems.iter().enumerate() {
+                if stem.is_some() {
+                    self.max_column = self.max_column.max(i);
+                }
             }
 
-            self.graph_data.push(row);
+            self.rows.push(GraphRow {
+                column,
+                is_working_copy: commit.is_working_copy,
+                is_immutable: commit.is_immutable,
+                change_id: commit.change_id.chars().take(8).collect(),
+                description: commit
+                    .description
+                    .lines()
+                    .next()
+                    .unwrap_or("(no description)")
+                    .to_string(),
+                author: commit.author.clone(),
+                timestamp: commit.timestamp.format("%Y-%m-%d %H:%M").to_string(),
+                bookmarks: commit.bookmarks.clone(),
+            });
+        }
+
+        // Create lines for any remaining stems (going to commits not displayed)
+        for (col, stem_opt) in stems.iter().enumerate() {
+            if let Some(stem) = stem_opt {
+                self.lines.push(GraphLine {
+                    source_col: stem.source_col,
+                    source_row: stem.source_row,
+                    target_col: col,
+                    target_row: num_rows, // Goes to bottom
+                    indirect: stem.indirect,
+                });
+            }
         }
     }
 
-    /// Get the width needed for the graph
-    pub fn width(&self) -> f32 {
-        let max_column = self
-            .graph_data
-            .iter()
-            .flat_map(|row| {
-                let node_col = row.node_column;
-                let line_cols = row.lines.iter().map(|l| l.from_column.max(l.to_column));
-                std::iter::once(node_col).chain(line_cols)
-            })
-            .max()
-            .unwrap_or(0);
-
-        (max_column as f32 + 2.0) * COLUMN_WIDTH
+    fn graph_width(&self) -> f32 {
+        (self.max_column as f32 + 2.0) * COLUMN_WIDTH
     }
 
-    /// Render the graph as a canvas element
-    pub fn view<M: 'static>(&self) -> Element<'_, M> {
-        let height = (self.graph_data.len() as f32) * ROW_HEIGHT;
-        let width = self.width();
+    pub fn view<M: 'static>(&self, _commits: &[CommitInfo]) -> Element<'_, M> {
+        let height = (self.rows.len() as f32) * ROW_HEIGHT;
 
         Canvas::new(GraphRenderer { graph: self })
-            .width(Length::Fixed(width))
+            .width(Length::Fill)
             .height(Length::Fixed(height))
             .into()
     }
@@ -198,16 +251,15 @@ struct GraphRenderer<'a> {
     graph: &'a GraphColumn,
 }
 
-/// Get lane colors from the theme palette
 fn get_lane_colors(theme: &Theme) -> Vec<Color> {
     let palette = theme.extended_palette();
     vec![
-        palette.primary.strong.color,   // Primary (pink/purple in Dracula)
-        palette.secondary.strong.color, // Secondary
-        palette.success.strong.color,   // Green
-        palette.danger.strong.color,    // Red
-        palette.primary.weak.color,     // Lighter primary
-        palette.secondary.weak.color,   // Lighter secondary
+        palette.primary.strong.color,
+        palette.secondary.strong.color,
+        palette.success.strong.color,
+        palette.danger.strong.color,
+        palette.primary.weak.color,
+        palette.secondary.weak.color,
     ]
 }
 
@@ -225,65 +277,162 @@ impl<M> canvas::Program<M> for GraphRenderer<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         let palette = theme.extended_palette();
         let lane_colors = get_lane_colors(theme);
+        let text_color = palette.background.base.text;
+        let secondary_text = palette.background.weak.text;
 
-        for (row_idx, row) in self.graph.graph_data.iter().enumerate() {
-            let y = (row_idx as f32 + 0.5) * ROW_HEIGHT;
+        let text_start_x = self.graph.graph_width().max(COLUMN_WIDTH * 3.0);
 
-            // Draw lines first (so nodes are on top)
-            for line in &row.lines {
-                let color = lane_colors[line.color_index % lane_colors.len()];
-                let stroke = Stroke::default().with_color(color).with_width(2.0);
+        // Draw all lines
+        for line in &self.graph.lines {
+            let source_x = (line.source_col as f32 + 0.5) * COLUMN_WIDTH;
+            let source_y = (line.source_row as f32) * ROW_HEIGHT + 21.0; // Below node center
+            let target_x = (line.target_col as f32 + 0.5) * COLUMN_WIDTH;
+            let target_y = (line.target_row as f32) * ROW_HEIGHT + 9.0; // Above node center (or bottom)
 
-                let from_x = (line.from_column as f32 + 0.5) * COLUMN_WIDTH;
-                let to_x = (line.to_column as f32 + 0.5) * COLUMN_WIDTH;
+            let color = lane_colors[line.target_col % lane_colors.len()];
+            let stroke = Stroke::default()
+                .with_color(color)
+                .with_width(if line.indirect { 1.5 } else { 2.0 });
 
-                match line.line_type {
-                    LineType::Vertical => {
-                        // Draw line from node down
-                        let path =
-                            Path::line(Point::new(from_x, y), Point::new(to_x, y + ROW_HEIGHT));
-                        frame.stroke(&path, stroke);
-                    }
-                    LineType::ToParent => {
-                        // Draw curved line to parent column
-                        let path = Path::new(|builder| {
-                            builder.move_to(Point::new(from_x, y));
-                            builder.quadratic_curve_to(
-                                Point::new(from_x, y + ROW_HEIGHT * 0.5),
-                                Point::new(to_x, y + ROW_HEIGHT),
-                            );
-                        });
-                        frame.stroke(&path, stroke);
-                    }
-                    LineType::Continuation => {
-                        // Draw straight vertical continuation
-                        let path = Path::line(
-                            Point::new(from_x, y - ROW_HEIGHT * 0.5),
-                            Point::new(to_x, y + ROW_HEIGHT * 0.5),
-                        );
-                        frame.stroke(&path, stroke);
-                    }
-                }
-            }
-
-            // Draw the node
-            let node_x = (row.node_column as f32 + 0.5) * COLUMN_WIDTH;
-            let node_color = if row.is_working_copy {
-                palette.success.strong.color // Green for working copy
+            if line.is_vertical() {
+                // Straight vertical line
+                let path = Path::line(
+                    Point::new(source_x, source_y),
+                    Point::new(target_x, target_y),
+                );
+                frame.stroke(&path, stroke);
             } else {
-                lane_colors[row.node_column % lane_colors.len()]
+                // Curved line (merge/fork)
+                let c1 = line.source_col;
+                let c2 = line.target_col;
+                let mid_y = source_y + 9.0;
+                let radius = 6.0;
+                let dir = if c2 > c1 { 1.0 } else { -1.0 };
+
+                let path = Path::new(|builder| {
+                    builder.move_to(Point::new(source_x, source_y));
+
+                    // Short vertical segment
+                    builder.line_to(Point::new(source_x, mid_y - radius));
+
+                    // Arc to horizontal
+                    builder.quadratic_curve_to(
+                        Point::new(source_x, mid_y),
+                        Point::new(source_x + radius * dir, mid_y),
+                    );
+
+                    // Horizontal line
+                    builder.line_to(Point::new(target_x - radius * dir, mid_y));
+
+                    // Arc to vertical
+                    builder.quadratic_curve_to(
+                        Point::new(target_x, mid_y),
+                        Point::new(target_x, mid_y + radius),
+                    );
+
+                    // Vertical line to target
+                    builder.line_to(Point::new(target_x, target_y));
+                });
+                frame.stroke(&path, stroke);
+            }
+        }
+
+        // Draw nodes and text on top
+        for (row_idx, row) in self.graph.rows.iter().enumerate() {
+            let y = (row_idx as f32 + 0.5) * ROW_HEIGHT;
+            let node_x = (row.column as f32 + 0.5) * COLUMN_WIDTH;
+
+            let node_color = if row.is_working_copy {
+                palette.success.strong.color
+            } else {
+                lane_colors[row.column % lane_colors.len()]
             };
 
             let node = Path::circle(Point::new(node_x, y), NODE_RADIUS);
-            frame.fill(&node, node_color);
 
-            // Draw outline for working copy
-            if row.is_working_copy {
-                let outline = Stroke::default()
-                    .with_color(palette.background.base.text)
-                    .with_width(2.0);
+            if row.is_immutable {
+                frame.fill(&node, node_color);
+            } else {
+                frame.fill(&node, palette.background.base.color);
+                let outline = Stroke::default().with_color(node_color).with_width(2.0);
                 frame.stroke(&node, outline);
+
+                if row.is_working_copy {
+                    let inner = Path::circle(Point::new(node_x, y), NODE_RADIUS * 0.5);
+                    frame.fill(&inner, palette.success.strong.color);
+                }
             }
+
+            // Draw text
+            let mut text_x = text_start_x;
+            let text_y = y - FONT_SIZE * 0.4;
+
+            let change_id_text = Text {
+                content: row.change_id.clone(),
+                position: Point::new(text_x, text_y),
+                color: node_color,
+                size: FONT_SIZE.into(),
+                font: Font::MONOSPACE,
+                ..Text::default()
+            };
+            frame.fill_text(change_id_text);
+            text_x += 75.0;
+
+            if !row.bookmarks.is_empty() {
+                let bookmark_str = row.bookmarks.join(", ");
+                let bookmark_text = Text {
+                    content: bookmark_str.clone(),
+                    position: Point::new(text_x, text_y),
+                    color: palette.primary.strong.color,
+                    size: FONT_SIZE.into(),
+                    font: Font::default(),
+                    ..Text::default()
+                };
+                frame.fill_text(bookmark_text);
+                text_x += (bookmark_str.chars().count() as f32 * 7.0).min(150.0) + 10.0;
+            }
+
+            let max_desc_width = bounds.width - text_x - 220.0;
+            let max_chars = (max_desc_width / 7.0) as usize;
+            let char_count = row.description.chars().count();
+            let desc = if char_count > max_chars && max_chars > 3 {
+                let truncated: String = row.description.chars().take(max_chars - 3).collect();
+                format!("{}...", truncated)
+            } else {
+                row.description.clone()
+            };
+
+            let desc_text = Text {
+                content: desc,
+                position: Point::new(text_x, text_y),
+                color: text_color,
+                size: FONT_SIZE.into(),
+                font: Font::default(),
+                ..Text::default()
+            };
+            frame.fill_text(desc_text);
+
+            let right_x = bounds.width - 200.0;
+
+            let author_text = Text {
+                content: row.author.clone(),
+                position: Point::new(right_x, text_y),
+                color: secondary_text,
+                size: (FONT_SIZE - 1.0).into(),
+                font: Font::default(),
+                ..Text::default()
+            };
+            frame.fill_text(author_text);
+
+            let date_text = Text {
+                content: row.timestamp.clone(),
+                position: Point::new(right_x + 100.0, text_y),
+                color: secondary_text,
+                size: (FONT_SIZE - 1.0).into(),
+                font: Font::default(),
+                ..Text::default()
+            };
+            frame.fill_text(date_text);
         }
 
         vec![frame.into_geometry()]
