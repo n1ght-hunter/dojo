@@ -1,3 +1,9 @@
+[workspace]
+members = ["crates/dojo_widgets"]
+
+[workspace.dependencies]
+iced = { version = "0.14", features = ["advanced"] }
+
 [package]
 name = "dojo"
 version = "0.1.0"
@@ -5,7 +11,7 @@ edition = "2024"
 license = "MPL-2.0"
 
 [dependencies]
-iced = { version = "0.14", features = ["tokio", "canvas"] }
+iced = { workspace = true, features = ["tokio", "canvas"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 thiserror = "2"
@@ -13,3 +19,4 @@ jj-lib = "0.37.0"
 jj-cli = "0.37.0"
 chrono = "0.4"
 futures = "0.3"
+dojo_widgets = { path = "crates/dojo_widgets" }
