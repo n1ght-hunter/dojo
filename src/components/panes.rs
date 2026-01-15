@@ -2,7 +2,7 @@ use dojo_widgets::pane_grid;
 use iced::widget::container;
 use iced::{Element, Fill, Size, Subscription, Theme};
 
-use crate::components::sidebar;
+use crate::components::{right_panel, sidebar};
 use crate::repo_state::RepoState;
 use crate::settings::Settings;
 
@@ -218,7 +218,7 @@ impl PaneState {
         theme: &'a Theme,
         map_sidebar: impl Fn(sidebar::Message) -> M + 'a + Clone,
         map_commit: impl Fn(usize) -> M + 'a + Clone,
-        map_right_panel: impl Fn(crate::components::right_panel::Message) -> M + 'a + Clone,
+        map_right_panel: impl Fn(right_panel::Message) -> M + 'a + Clone,
         map_resize: impl Fn(Message) -> M + 'a,
     ) -> Element<'a, M> {
         let map_sidebar_clone = map_sidebar.clone();
@@ -229,7 +229,7 @@ impl PaneState {
             pane_grid::PaneGrid::new(&self.panes, move |_pane, pane_type, _is_maximized| {
                 let content: Element<'_, M> = match pane_type {
                     PaneType::Sidebar => {
-                        container(repo.sidebar.view().map(map_sidebar_clone.clone()))
+                        container(sidebar::view(&repo.sidebar).map(map_sidebar_clone.clone()))
                             .style(container::bordered_box)
                             .width(Fill)
                             .height(Fill)
@@ -242,16 +242,16 @@ impl PaneState {
                             .height(Fill)
                             .into()
                     }
-                    PaneType::RightPanel => repo
-                        .right_panel
-                        .view(
-                            repo.log_screen.selected_commit(),
-                            &repo.files,
-                            &repo.diffs,
-                            &settings.diff,
+                    PaneType::RightPanel => {
+                        let ctx = right_panel::Context {
+                            commit: repo.log_screen.selected_commit(),
+                            files: &repo.files,
+                            diffs: &repo.diffs,
                             theme,
-                        )
-                        .map(map_right_panel_clone.clone()),
+                        };
+                        right_panel::view(&repo.right_panel, settings, ctx)
+                            .map(map_right_panel_clone.clone())
+                    }
                 };
 
                 pane_grid::Content::new(content)

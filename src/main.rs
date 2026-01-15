@@ -4,14 +4,16 @@ mod jj;
 mod repo_state;
 mod screens;
 mod settings;
+mod state_wrapper;
 use std::path::PathBuf;
 
 use iced::widget::{center, column, container, text};
 use iced::{Element, Fill, Subscription, Task, Theme};
 
-use components::{PaneState, panes, tab_bar, toolbar};
+use components::{PaneState, panes, right_panel, tab_bar, toolbar};
 use repo_state::RepoState;
 use settings::Settings;
+use state_wrapper::StateMut;
 
 fn main() -> iced::Result {
     iced::application(boot, update, view)
@@ -51,9 +53,7 @@ fn subscription(app: &App) -> Subscription<Message> {
     // Get subscription from active repo's right panel (for keyboard shortcuts)
     if let Some(repo) = app.repos.get(app.active_repo) {
         let active_index = app.active_repo;
-        let right_panel_sub = repo
-            .right_panel
-            .subscription()
+        let right_panel_sub = right_panel::subscription(&repo.right_panel)
             .with(active_index)
             .map(|(index, msg)| Message::Repo(index, repo_state::Message::RightPanel(msg)));
         Subscription::batch([pane_sub, right_panel_sub])
@@ -130,8 +130,7 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
                     }
                 }
 
-                app.repos[index]
-                    .update(msg)
+                repo_state::update(StateMut::new(&mut app.repos[index], &mut app.settings), msg)
                     .map(move |m| Message::Repo(index, m))
             } else {
                 Task::none()

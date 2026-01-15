@@ -95,7 +95,7 @@ impl Default for UndoStack {
 }
 
 /// State for the description editor
-pub struct DescriptionEditor {
+pub struct State {
     /// Whether the editor is active
     pub editing: bool,
     /// The text editor content
@@ -106,8 +106,8 @@ pub struct DescriptionEditor {
     undo_stack: UndoStack,
 }
 
-impl DescriptionEditor {
-    /// Create a new inactive description editor
+impl State {
+    /// Create a new inactive description editor state
     pub fn new() -> Self {
         Self {
             editing: false,
@@ -142,83 +142,86 @@ impl DescriptionEditor {
     pub fn has_changes(&self) -> bool {
         self.content.text() != self.original
     }
+}
 
-    /// Update the editor state based on a message
-    pub fn update(&mut self, message: Message) {
-        match message {
-            Message::EditorAction(action) => {
-                self.content.perform(action);
-                self.undo_stack.push(self.content.text());
-            }
-            Message::Undo => {
-                if let Some(text) = self.undo_stack.undo() {
-                    self.content = text_editor::Content::with_text(&text);
-                }
-            }
-            Message::Redo => {
-                if let Some(text) = self.undo_stack.redo() {
-                    self.content = text_editor::Content::with_text(&text);
-                }
-            }
-            Message::Save | Message::Cancel => {
-                // These are handled by the parent component
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+use crate::state_wrapper::StateMut;
+
+/// Update the editor state based on a message
+pub fn update(mut state: StateMut<'_, State>, message: Message) {
+    match message {
+        Message::EditorAction(action) => {
+            state.content.perform(action);
+            let text = state.content.text();
+            state.undo_stack.push(text);
+        }
+        Message::Undo => {
+            if let Some(text) = state.undo_stack.undo() {
+                state.content = text_editor::Content::with_text(&text);
             }
         }
-    }
-
-    /// Render the editor view
-    pub fn view(&self) -> Element<'_, Message> {
-        let editor = text_editor(&self.content)
-            .on_action(Message::EditorAction)
-            .height(Length::Fixed(120.0));
-
-        let has_changes = self.has_changes();
-
-        let save_button = if has_changes {
-            button(text("Save").size(11))
-                .on_press(Message::Save)
-                .padding([4, 12])
-                .style(button::primary)
-        } else {
-            button(text("Save").size(11))
-                .padding([4, 12])
-                .style(button::secondary)
-        };
-
-        let cancel_button = button(text("Cancel").size(11))
-            .on_press(Message::Cancel)
-            .padding([4, 12])
-            .style(button::secondary);
-
-        let header = row![
-            text("Description").size(11).style(text::primary),
-            container(text("")).width(Fill),
-            save_button,
-            cancel_button,
-        ]
-        .spacing(8);
-
-        container(column![header, editor].spacing(8))
-            .padding(12)
-            .width(Fill)
-            .style(container::bordered_box)
-            .into()
-    }
-
-    /// Subscription for keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z)
-    /// Only active when editing
-    pub fn subscription(&self) -> Subscription<Message> {
-        if self.editing {
-            keyboard::listen().filter_map(handle_keyboard_event)
-        } else {
-            Subscription::none()
+        Message::Redo => {
+            if let Some(text) = state.undo_stack.redo() {
+                state.content = text_editor::Content::with_text(&text);
+            }
+        }
+        Message::Save | Message::Cancel => {
+            // These are handled by the parent component
         }
     }
 }
 
-impl Default for DescriptionEditor {
-    fn default() -> Self {
-        Self::new()
+/// Render the editor view
+pub fn view(state: &State) -> Element<'_, Message> {
+    let editor = text_editor(&state.content)
+        .on_action(Message::EditorAction)
+        .height(Length::Fixed(120.0));
+
+    let has_changes = state.has_changes();
+
+    let save_button = if has_changes {
+        button(text("Save").size(11))
+            .on_press(Message::Save)
+            .padding([4, 12])
+            .style(button::primary)
+    } else {
+        button(text("Save").size(11))
+            .padding([4, 12])
+            .style(button::secondary)
+    };
+
+    let cancel_button = button(text("Cancel").size(11))
+        .on_press(Message::Cancel)
+        .padding([4, 12])
+        .style(button::secondary);
+
+    let header = row![
+        text("Description").size(11).style(text::primary),
+        container(text("")).width(Fill),
+        save_button,
+        cancel_button,
+    ]
+    .spacing(8);
+
+    container(column![header, editor].spacing(8))
+        .padding(12)
+        .width(Fill)
+        .style(container::bordered_box)
+        .into()
+}
+
+/// Subscription for keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z)
+/// Only active when editing
+pub fn subscription(state: &State) -> Subscription<Message> {
+    if state.editing {
+        keyboard::listen().filter_map(handle_keyboard_event)
+    } else {
+        Subscription::none()
     }
 }
 

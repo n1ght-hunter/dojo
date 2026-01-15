@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use iced::Task;
 
-use crate::components::{RightPanel, Sidebar, right_panel, sidebar};
+use crate::components::{right_panel, sidebar};
 use crate::error::DojoError;
 use crate::jj::{CommitInfo, FileChange, FileDiff, FileStats, RepoHandle};
 use crate::screens::LogScreen;
+use crate::state_wrapper::StateMut;
 
 /// State for a single repository
 pub struct RepoState {
@@ -14,8 +15,8 @@ pub struct RepoState {
     pub name: String,
     pub handle: Option<Arc<RepoHandle>>,
     pub log_screen: LogScreen,
-    pub sidebar: Sidebar,
-    pub right_panel: RightPanel,
+    pub sidebar: sidebar::State,
+    pub right_panel: right_panel::State,
     pub files: Vec<FileChange>,
     pub diffs: Vec<FileDiff>,
     pub loading: bool,
@@ -56,8 +57,8 @@ impl RepoState {
             name,
             handle: None,
             log_screen: LogScreen::new(),
-            sidebar: Sidebar::new(),
-            right_panel: RightPanel::new(),
+            sidebar: sidebar::State::default(),
+            right_panel: right_panel::State::new(),
             files: Vec::new(),
             diffs: Vec::new(),
             loading: true,
@@ -79,176 +80,182 @@ impl RepoState {
             Message::Loaded,
         )
     }
+}
 
-    /// Update repo state based on message
-    pub fn update(&mut self, message: Message) -> Task<Message> {
-        match message {
-            Message::Loaded(result) => {
-                self.loading = false;
-                match result {
-                    Ok((handle, commits)) => {
-                        self.handle = Some(handle.clone());
-                        self.error = None;
+/// Update repo state based on message
+pub fn update(mut state: StateMut<'_, RepoState>, message: Message) -> Task<Message> {
+    match message {
+        Message::Loaded(result) => {
+            state.loading = false;
+            match result {
+                Ok((handle, commits)) => {
+                    state.handle = Some(handle.clone());
+                    state.error = None;
 
-                        // Collect commit IDs for stats loading
-                        let commit_ids: Vec<String> =
-                            commits.iter().map(|c| c.commit_id.clone()).collect();
+                    // Collect commit IDs for stats loading
+                    let commit_ids: Vec<String> =
+                        commits.iter().map(|c| c.commit_id.clone()).collect();
 
-                        self.log_screen.set_commits(commits);
+                    state.log_screen.set_commits(commits);
 
-                        // Load files for first selected commit and stats for all commits
-                        let mut tasks = vec![self.load_stats(handle, commit_ids)];
+                    // Load files for first selected commit and stats for all commits
+                    let mut tasks = vec![load_stats(handle, commit_ids)];
 
-                        if let Some(commit) = self.log_screen.selected_commit() {
-                            let commit_id = commit.commit_id.clone();
-                            tasks.push(self.load_commit_data(commit_id));
-                        }
-
-                        return Task::batch(tasks);
+                    if let Some(commit) = state.log_screen.selected_commit() {
+                        let commit_id = commit.commit_id.clone();
+                        let handle = state.handle.clone();
+                        tasks.push(load_commit_data(handle, commit_id));
                     }
-                    Err(e) => {
-                        self.error = Some(e);
+
+                    return Task::batch(tasks);
+                }
+                Err(e) => {
+                    state.error = Some(e);
+                }
+            }
+            Task::none()
+        }
+
+        Message::SelectCommit(index) => {
+            state.log_screen.select(index);
+            right_panel::clear(&mut state.right_panel);
+            state.files.clear();
+            state.diffs.clear();
+
+            if let Some(commit) = state.log_screen.selected_commit() {
+                let commit_id = commit.commit_id.clone();
+                let handle = state.handle.clone();
+                return load_commit_data(handle, commit_id);
+            }
+            Task::none()
+        }
+
+        Message::FilesLoaded(result) => {
+            match result {
+                Ok(files) => state.files = files,
+                Err(e) => state.error = Some(e),
+            }
+            Task::none()
+        }
+
+        Message::DiffsLoaded(result) => {
+            match result {
+                Ok(diffs) => {
+                    state.diffs = diffs;
+                }
+                Err(e) => state.error = Some(e),
+            }
+            Task::none()
+        }
+
+        Message::StatsLoaded(result) => {
+            match result {
+                Ok(stats) => {
+                    // Update commits with their stats
+                    state.log_screen.update_stats(stats);
+                }
+                Err(e) => state.error = Some(e),
+            }
+            Task::none()
+        }
+
+        Message::Sidebar(msg) => {
+            sidebar::update(state.reborrow().map(|s| &mut s.sidebar), msg);
+            Task::none()
+        }
+
+        Message::RightPanel(msg) => {
+            let selected_commit = state.log_screen.selected_commit().cloned();
+
+            // Handle special cases that need repo_state access
+            match &msg {
+                right_panel::Message::Summary(summary_msg) => match summary_msg {
+                    crate::components::summary::Message::ExpandAll => {
+                        let files = state.files.clone();
+                        right_panel::expand_all(&mut state.right_panel, &files);
+                        return Task::none();
                     }
-                }
-                Task::none()
-            }
+                    crate::components::summary::Message::DescriptionEditor(editor_msg) => {
+                        if matches!(
+                            editor_msg,
+                            crate::components::description_editor::Message::Save
+                        ) {
+                            // Save description to repository
+                            if let Some(ref commit) = selected_commit {
+                                let new_description = state.right_panel.get_description_draft();
+                                let commit_id = commit.commit_id.clone();
+                                let handle = state.handle.clone();
+                                let path = state.path.clone();
 
-            Message::SelectCommit(index) => {
-                self.log_screen.select(index);
-                self.right_panel.clear();
-                self.files.clear();
-                self.diffs.clear();
-
-                if let Some(commit) = self.log_screen.selected_commit() {
-                    let commit_id = commit.commit_id.clone();
-                    return self.load_commit_data(commit_id);
-                }
-                Task::none()
-            }
-
-            Message::FilesLoaded(result) => {
-                match result {
-                    Ok(files) => self.files = files,
-                    Err(e) => self.error = Some(e),
-                }
-                Task::none()
-            }
-
-            Message::DiffsLoaded(result) => {
-                match result {
-                    Ok(diffs) => {
-                        self.diffs = diffs;
-                    }
-                    Err(e) => self.error = Some(e),
-                }
-                Task::none()
-            }
-
-            Message::StatsLoaded(result) => {
-                match result {
-                    Ok(stats) => {
-                        // Update commits with their stats
-                        self.log_screen.update_stats(stats);
-                    }
-                    Err(e) => self.error = Some(e),
-                }
-                Task::none()
-            }
-
-            Message::Sidebar(msg) => {
-                self.sidebar.update(msg);
-                Task::none()
-            }
-
-            Message::RightPanel(msg) => {
-                let selected_commit = self.log_screen.selected_commit();
-
-                // Handle special cases that need repo_state access
-                match &msg {
-                    right_panel::Message::Summary(summary_msg) => match summary_msg {
-                        crate::components::summary::Message::ExpandAll => {
-                            self.right_panel.expand_all(&self.files);
+                                return Task::perform(
+                                    async move {
+                                        save_description(
+                                            handle,
+                                            &path,
+                                            &commit_id,
+                                            &new_description,
+                                        )
+                                        .await
+                                    },
+                                    Message::DescriptionSaved,
+                                );
+                            }
                             return Task::none();
                         }
-                        crate::components::summary::Message::DescriptionEditor(editor_msg) => {
-                            if matches!(
-                                editor_msg,
-                                crate::components::description_editor::Message::Save
-                            ) {
-                                // Save description to repository
-                                if let Some(commit) = selected_commit {
-                                    let new_description = self.right_panel.get_description_draft();
-                                    let commit_id = commit.commit_id.clone();
-                                    let handle = self.handle.clone();
-                                    let path = self.path.clone();
-
-                                    return Task::perform(
-                                        async move {
-                                            save_description(
-                                                handle,
-                                                &path,
-                                                &commit_id,
-                                                &new_description,
-                                            )
-                                            .await
-                                        },
-                                        Message::DescriptionSaved,
-                                    );
-                                }
-                                return Task::none();
-                            }
-                        }
-                        _ => {}
-                    },
+                    }
                     _ => {}
-                }
-
-                self.right_panel.update(msg, selected_commit);
-                Task::none()
+                },
+                _ => {}
             }
 
-            Message::DescriptionSaved(result) => {
-                match result {
-                    Ok(()) => {
-                        self.right_panel.description_saved();
-                        // Reload commits to get updated description
-                        let path = self.path.clone();
-                        return Self::load(path);
-                    }
-                    Err(e) => {
-                        self.error = Some(e);
-                    }
+            right_panel::update(
+                state.reborrow().map(|s| &mut s.right_panel),
+                msg,
+                selected_commit.as_ref(),
+            );
+            Task::none()
+        }
+
+        Message::DescriptionSaved(result) => {
+            match result {
+                Ok(()) => {
+                    right_panel::description_saved(&mut state.right_panel);
+                    // Reload commits to get updated description
+                    let path = state.path.clone();
+                    return RepoState::load(path);
                 }
-                Task::none()
+                Err(e) => {
+                    state.error = Some(e);
+                }
             }
+            Task::none()
         }
     }
+}
 
-    /// Load files and diffs for a commit
-    fn load_commit_data(&self, commit_id: String) -> Task<Message> {
-        let handle = self.handle.clone();
-        let handle2 = handle.clone();
-        let commit_id2 = commit_id.clone();
+/// Load files and diffs for a commit
+fn load_commit_data(handle: Option<Arc<RepoHandle>>, commit_id: String) -> Task<Message> {
+    let handle2 = handle.clone();
+    let commit_id2 = commit_id.clone();
 
-        Task::batch([
-            Task::perform(
-                async move { load_files(handle, &commit_id).await },
-                Message::FilesLoaded,
-            ),
-            Task::perform(
-                async move { load_diffs(handle2, &commit_id2).await },
-                Message::DiffsLoaded,
-            ),
-        ])
-    }
-
-    /// Load stats for all commits
-    fn load_stats(&self, handle: Arc<RepoHandle>, commit_ids: Vec<String>) -> Task<Message> {
+    Task::batch([
         Task::perform(
-            async move { load_batch_stats(handle, commit_ids).await },
-            Message::StatsLoaded,
-        )
-    }
+            async move { load_files(handle, &commit_id).await },
+            Message::FilesLoaded,
+        ),
+        Task::perform(
+            async move { load_diffs(handle2, &commit_id2).await },
+            Message::DiffsLoaded,
+        ),
+    ])
+}
+
+/// Load stats for all commits
+fn load_stats(handle: Arc<RepoHandle>, commit_ids: Vec<String>) -> Task<Message> {
+    Task::perform(
+        async move { load_batch_stats(handle, commit_ids).await },
+        Message::StatsLoaded,
+    )
 }
 
 // Helper functions for async loading
