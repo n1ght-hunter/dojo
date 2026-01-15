@@ -3,7 +3,7 @@ use iced::widget::canvas::{self, Canvas, Event, Frame, Geometry, Path, Stroke, T
 use iced::{Color, Element, Font, Length, Point, Rectangle, Theme};
 use std::collections::HashMap;
 
-use crate::jj::CommitInfo;
+use dojo_jj::CommitInfo;
 
 /// Column spacing for graph lines
 const COLUMN_WIDTH: f32 = 18.0;

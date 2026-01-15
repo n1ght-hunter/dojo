@@ -1,8 +1,18 @@
 [workspace]
-members = ["crates/dojo_widgets"]
+members = ["crates/dojo_widgets", "crates/dojo_jj"]
 
 [workspace.dependencies]
+dojo_widgets = { path = "crates/dojo_widgets" }
+dojo_jj = { path = "crates/dojo_jj" }
+
 iced = { version = "0.14", features = ["advanced"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+jj-lib = "0.37.0"
+jj-cli = "0.37.0"
+chrono = "0.4"
+futures = "0.3"
 
 [package]
 name = "dojo"
@@ -12,11 +22,10 @@ license = "MPL-2.0"
 
 [dependencies]
 iced = { workspace = true, features = ["tokio", "canvas"] }
-tokio = { version = "1", features = ["full"] }
-anyhow = "1"
-thiserror = "2"
-jj-lib = "0.37.0"
-jj-cli = "0.37.0"
-chrono = "0.4"
-futures = "0.3"
-dojo_widgets = { path = "crates/dojo_widgets" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+dojo_widgets = { workspace = true }
+dojo_jj = { workspace = true }

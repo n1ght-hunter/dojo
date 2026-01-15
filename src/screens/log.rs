@@ -2,7 +2,7 @@ use iced::widget::{container, scrollable, text};
 use iced::{Element, Fill};
 
 use crate::components::GraphColumn;
-use crate::jj::{CommitInfo, FileStats};
+use dojo_jj::{CommitInfo, FileStats};
 
 /// The commit log screen showing the list of commits
 pub struct LogScreen {

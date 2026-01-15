@@ -1,6 +1,4 @@
 mod components;
-mod error;
-mod jj;
 mod repo_state;
 mod screens;
 mod settings;
@@ -8,9 +6,11 @@ mod state_wrapper;
 use std::path::PathBuf;
 
 use iced::widget::{center, column, container, text};
-use iced::{Element, Fill, Subscription, Task, Theme};
+use iced::window;
+use iced::{Element, Event, Fill, Subscription, Task, Theme};
 
 use components::{PaneState, panes, right_panel, tab_bar, toolbar};
+use dojo_jj::WorkspaceEvent;
 use repo_state::RepoState;
 use settings::Settings;
 use state_wrapper::StateMut;
@@ -45,28 +45,51 @@ pub enum Message {
     Panes(panes::Message),
     // File dialog result for opening new repo
     RepoPathSelected(Option<PathBuf>),
+    // Window focus - triggers snapshot and refresh
+    WindowFocused,
 }
 
 fn subscription(app: &App) -> Subscription<Message> {
     let pane_sub = panes::subscription().map(Message::Panes);
 
+    // Listen for window focus events to trigger snapshot/refresh
+    let focus_sub = iced::event::listen_with(|event, _status, _id| {
+        if let Event::Window(window::Event::Focused) = event {
+            Some(Message::WindowFocused)
+        } else {
+            None
+        }
+    });
+
+    // Worker subscriptions for each repo
+    let repo_subs = app.repos.iter().enumerate().map(|(i, repo)| {
+        repo.subscription()
+            .with(i)
+            .map(|(i, msg)| Message::Repo(i, msg))
+    });
+
     // Get subscription from active repo's right panel (for keyboard shortcuts)
-    if let Some(repo) = app.repos.get(app.active_repo) {
+    let right_panel_sub = app.repos.get(app.active_repo).map(|repo| {
         let active_index = app.active_repo;
-        let right_panel_sub = right_panel::subscription(&repo.right_panel)
+        right_panel::subscription(&repo.right_panel)
             .with(active_index)
-            .map(|(index, msg)| Message::Repo(index, repo_state::Message::RightPanel(msg)));
-        Subscription::batch([pane_sub, right_panel_sub])
-    } else {
-        pane_sub
+            .map(|(index, msg)| Message::Repo(index, repo_state::Message::RightPanel(msg)))
+    });
+
+    let mut subs: Vec<Subscription<Message>> = vec![pane_sub, focus_sub];
+    subs.extend(repo_subs);
+    if let Some(rp_sub) = right_panel_sub {
+        subs.push(rp_sub);
     }
+
+    Subscription::batch(subs)
 }
 
 fn boot() -> (App, Task<Message>) {
     let repo_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // Create initial repo state
-    let repo = RepoState::new(repo_path.clone());
+    let repo = RepoState::new(repo_path);
 
     let app = App {
         repos: vec![repo],
@@ -78,10 +101,8 @@ fn boot() -> (App, Task<Message>) {
         theme: Theme::Dracula,
     };
 
-    // Load the repository
-    let task = RepoState::load(repo_path).map(|msg| Message::Repo(0, msg));
-
-    (app, task)
+    // Worker subscription handles initial loading
+    (app, Task::none())
 }
 
 fn update(app: &mut App, message: Message) -> Task<Message> {
@@ -121,7 +142,8 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
 
         Message::Repo(index, msg) => {
             if index < app.repos.len() {
-                if let repo_state::Message::Loaded(result) = &msg {
+                // Check for worker Loaded event to update app-level loading state
+                if let repo_state::Message::Worker(WorkspaceEvent::Loaded(result)) = &msg {
                     app.loading = false;
                     if let Err(e) = result {
                         app.error = Some(e.to_string());
@@ -130,8 +152,13 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
                     }
                 }
 
-                repo_state::update(StateMut::new(&mut app.repos[index], &mut app.settings), msg)
-                    .map(move |m| Message::Repo(index, m))
+                // Clone tx before mutable borrow
+                let tx = app.repos[index].command_tx.clone();
+                let mut state = StateMut::new(&mut app.repos[index], &mut app.settings);
+                if let Some(ref tx) = tx {
+                    state = state.with_worker(tx);
+                }
+                repo_state::update(state, msg).map(move |m| Message::Repo(index, m))
             } else {
                 Task::none()
             }
@@ -145,9 +172,17 @@ fn update(app: &mut App, message: Message) -> Task<Message> {
         Message::RepoPathSelected(path) => {
             if let Some(path) = path {
                 let index = app.repos.len();
-                app.repos.push(RepoState::new(path.clone()));
+                app.repos.push(RepoState::new(path));
                 app.active_repo = index;
-                return RepoState::load(path).map(move |msg| Message::Repo(index, msg));
+                // Worker subscription will handle loading automatically
+            }
+            Task::none()
+        }
+
+        Message::WindowFocused => {
+            // Trigger refresh via worker to capture any file changes
+            if let Some(repo) = app.repos.get(app.active_repo) {
+                repo.refresh();
             }
             Task::none()
         }

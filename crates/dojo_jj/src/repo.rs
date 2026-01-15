@@ -5,14 +5,16 @@ use jj_lib::backend::CommitId;
 use jj_lib::commit::Commit;
 use jj_lib::config::{ConfigLayer, ConfigSource};
 use jj_lib::diff::{ContentDiff, DiffHunkKind};
+use jj_lib::gitignore::GitIgnoreFile;
 use jj_lib::graph::{GraphEdgeType, TopoGroupedGraphIterator};
-use jj_lib::matchers::EverythingMatcher;
+use jj_lib::matchers::{EverythingMatcher, NothingMatcher};
 use jj_lib::merged_tree::TreeDiffEntry;
 use jj_lib::object_id::ObjectId;
 use jj_lib::repo::{ReadonlyRepo, Repo, StoreFactories};
 use jj_lib::revset::{RevsetExpression, SymbolResolver, SymbolResolverExtension};
 use jj_lib::settings::UserSettings;
 use jj_lib::store::Store;
+use jj_lib::working_copy::SnapshotOptions;
 use jj_lib::workspace::{Workspace, default_working_copy_factories};
 use std::path::Path;
 use std::sync::Arc;
@@ -147,6 +149,85 @@ impl RepoHandle {
             repo_path: path.to_path_buf(),
             settings,
         })
+    }
+
+    /// Snapshot the working copy to capture disk changes into the commit tree.
+    pub async fn snapshot_working_copy(path: &Path) -> Result<()> {
+        let settings = Self::load_settings(Some(path))?;
+
+        // Load workspace - drop non-Send factory types immediately after
+        let mut workspace = {
+            let store_factories = StoreFactories::default();
+            let working_copy_factories = default_working_copy_factories();
+            Workspace::load(&settings, path, &store_factories, &working_copy_factories)
+                .context("Failed to load jj workspace")?
+        };
+
+        let repo = workspace
+            .repo_loader()
+            .load_at_head()
+            .context("Failed to load repository")?;
+
+        // Check if there's a working copy commit
+        let workspace_name = workspace.workspace_name().to_owned();
+        let wc_commit_id = match repo.view().get_wc_commit_id(&workspace_name) {
+            Some(id) => id.clone(),
+            None => return Ok(()), // No working copy to snapshot
+        };
+
+        // Lock the working copy for mutation
+        let mut locked_ws = workspace
+            .start_working_copy_mutation()
+            .context("Failed to lock working copy. Another process may be using the repository.")?;
+
+        // Build snapshot options
+        let base_ignores = GitIgnoreFile::empty();
+        let snapshot_options = SnapshotOptions {
+            base_ignores,
+            progress: None,
+            start_tracking_matcher: &EverythingMatcher,
+            force_tracking_matcher: &NothingMatcher,
+            max_new_file_size: u64::MAX,
+        };
+
+        // Perform the snapshot
+        let (new_tree, _stats) = locked_ws
+            .locked_wc()
+            .snapshot(&snapshot_options)
+            .await
+            .context("Failed to snapshot working copy")?;
+
+        // Check if the tree changed
+        let wc_commit = repo.store().get_commit(&wc_commit_id)?;
+        let old_tree = wc_commit.tree();
+
+        if new_tree.tree_ids() != old_tree.tree_ids() {
+            // Tree changed - need to amend the working copy commit
+            let mut tx = repo.start_transaction();
+
+            let new_commit = tx
+                .repo_mut()
+                .rewrite_commit(&wc_commit)
+                .set_tree(new_tree)
+                .write()?;
+
+            tx.repo_mut()
+                .set_wc_commit(workspace_name, new_commit.id().clone())?;
+
+            // Rebase any descendants (required after rewrites)
+            tx.repo_mut().rebase_descendants()?;
+
+            let new_repo = tx.commit("snapshot working copy")?;
+
+            // Finish the working copy mutation
+            locked_ws.finish(new_repo.operation().id().clone())?;
+            drop(new_repo);
+        } else {
+            // No changes - just drop the lock
+            drop(locked_ws);
+        }
+
+        Ok(())
     }
 
     /// Load jj settings using jj-cli's config system
@@ -301,9 +382,9 @@ impl RepoHandle {
 
     /// Get the changed files for a commit (compared to its first parent)
     pub async fn get_changed_files(&self, commit_id: &str) -> Result<Vec<FileChange>> {
-        let commit_id = CommitId::try_from_hex(commit_id).context("Invalid commit ID hex")?;
+        let commit_id_obj = CommitId::try_from_hex(commit_id).context("Invalid commit ID hex")?;
         let store = self.repo.store();
-        let commit = store.get_commit(&commit_id)?;
+        let commit = store.get_commit(&commit_id_obj)?;
 
         // Get the tree for this commit
         let tree = commit.tree();
@@ -358,13 +439,17 @@ impl RepoHandle {
         let mut lines_removed = 0;
 
         for file in &files {
-            let diff = self.get_file_diff(commit_id, &file.path).await?;
-            for line in &diff.lines {
-                match line {
-                    DiffLine::Added(_) => lines_added += 1,
-                    DiffLine::Removed(_) => lines_removed += 1,
-                    _ => {}
-                }
+            if let Ok(diff) = self.get_file_diff(commit_id, &file.path).await {
+                lines_added += diff
+                    .lines
+                    .iter()
+                    .filter(|l| matches!(l, DiffLine::Added(_)))
+                    .count();
+                lines_removed += diff
+                    .lines
+                    .iter()
+                    .filter(|l| matches!(l, DiffLine::Removed(_)))
+                    .count();
             }
         }
 

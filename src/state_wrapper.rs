@@ -5,7 +5,10 @@
 
 use std::ops::{Deref, DerefMut};
 
+use tokio::sync::mpsc;
+
 use crate::settings::Settings;
+use dojo_jj::WorkspaceCommand;
 
 /// Immutable reference wrapper for component state.
 ///
@@ -63,12 +66,42 @@ impl<T> Deref for StateRef<'_, T> {
 pub struct StateMut<'a, T> {
     inner: &'a mut T,
     settings: &'a mut Settings,
+    /// Optional command sender for worker communication (cloned, not borrowed)
+    worker_tx: Option<mpsc::Sender<WorkspaceCommand>>,
 }
 
 impl<'a, T> StateMut<'a, T> {
-    /// Create a new mutable state wrapper.
+    /// Create a new mutable state wrapper (without worker).
     pub fn new(inner: &'a mut T, settings: &'a mut Settings) -> Self {
-        Self { inner, settings }
+        Self {
+            inner,
+            settings,
+            worker_tx: None,
+        }
+    }
+
+    /// Add worker command sender (builder pattern). Clones the sender.
+    pub fn with_worker(mut self, tx: &mpsc::Sender<WorkspaceCommand>) -> Self {
+        self.worker_tx = Some(tx.clone());
+        self
+    }
+
+    /// Send a command to the worker (fire and forget).
+    /// Panics if no worker is attached.
+    pub fn send_command(&self, cmd: WorkspaceCommand) {
+        let tx = self
+            .worker_tx
+            .as_ref()
+            .expect("send_command called without worker attached");
+        let _ = tx.try_send(cmd);
+    }
+
+    /// Get a clone of the worker sender for Task-based commands.
+    /// Panics if no worker is attached.
+    pub fn worker_tx(&self) -> mpsc::Sender<WorkspaceCommand> {
+        self.worker_tx
+            .clone()
+            .expect("worker_tx called without worker attached")
     }
 
     /// Access the app-level settings (immutable).
@@ -93,6 +126,7 @@ impl<'a, T> StateMut<'a, T> {
         StateMut {
             inner: f(self.inner),
             settings: self.settings,
+            worker_tx: self.worker_tx,
         }
     }
 
@@ -103,6 +137,7 @@ impl<'a, T> StateMut<'a, T> {
         StateMut {
             inner: self.inner,
             settings: self.settings,
+            worker_tx: self.worker_tx.clone(),
         }
     }
 }

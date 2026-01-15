@@ -1,8 +1,8 @@
-use iced::widget::{container, rich_text, row, text, text::Span, Column, Row};
+use iced::widget::{Column, Row, container, rich_text, row, text, text::Span};
 use iced::{Background, Border, Color, Element, Fill, Length, Theme};
 
-use crate::jj::{ChangeKind, DiffLine, DiffSegment, FileDiff};
 use crate::settings::DiffSettings;
+use dojo_jj::{ChangeKind, DiffLine, DiffSegment, FileDiff};
 
 /// Colors for diff rendering, derived from theme
 struct DiffColors {
@@ -17,10 +17,7 @@ struct DiffColors {
 }
 
 fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color {
-        a: alpha,
-        ..color
-    }
+    Color { a: alpha, ..color }
 }
 
 fn get_diff_colors(theme: &Theme) -> DiffColors {
@@ -80,10 +77,17 @@ fn view_unified<'a, M: 'a>(diff: &FileDiff, colors: &DiffColors) -> Element<'a, 
             } => {
                 old_line = *old_start;
                 new_line = *new_start;
-                lines = lines.push(hunk_line::<M>(*old_start, *old_count, *new_start, *new_count, colors));
+                lines = lines.push(hunk_line::<M>(
+                    *old_start, *old_count, *new_start, *new_count, colors,
+                ));
             }
             DiffLine::Context(content) => {
-                lines = lines.push(context_line::<M>(old_line, new_line, content.clone(), colors));
+                lines = lines.push(context_line::<M>(
+                    old_line,
+                    new_line,
+                    content.clone(),
+                    colors,
+                ));
                 old_line += 1;
                 new_line += 1;
             }
@@ -143,8 +147,10 @@ fn view_side_by_side<'a, M: 'a>(diff: &FileDiff, colors: &DiffColors) -> Element
                 if i + 1 < lines.len() {
                     if let DiffLine::Added(add_segments) = &lines[i + 1] {
                         // Paired: removed on left, added on right
-                        left_lines = left_lines.push(side_removed_line::<M>(old_line, segments, colors));
-                        right_lines = right_lines.push(side_added_line::<M>(new_line, add_segments, colors));
+                        left_lines =
+                            left_lines.push(side_removed_line::<M>(old_line, segments, colors));
+                        right_lines =
+                            right_lines.push(side_added_line::<M>(new_line, add_segments, colors));
                         old_line += 1;
                         new_line += 1;
                         i += 2;
@@ -175,7 +181,11 @@ fn view_side_by_side<'a, M: 'a>(diff: &FileDiff, colors: &DiffColors) -> Element
 }
 
 /// Single column view for new/deleted files
-fn view_single_column<'a, M: 'a>(diff: &FileDiff, colors: &DiffColors, is_new: bool) -> Element<'a, M> {
+fn view_single_column<'a, M: 'a>(
+    diff: &FileDiff,
+    colors: &DiffColors,
+    is_new: bool,
+) -> Element<'a, M> {
     let mut lines: Column<'_, M> = Column::new().spacing(0);
     let mut line_num = 1u32;
 
@@ -208,7 +218,13 @@ fn view_single_column<'a, M: 'a>(diff: &FileDiff, colors: &DiffColors, is_new: b
 
 // === Unified view line helpers ===
 
-fn hunk_line<'a, M: 'a>(old_start: u32, old_count: u32, new_start: u32, new_count: u32, colors: &DiffColors) -> Element<'a, M> {
+fn hunk_line<'a, M: 'a>(
+    old_start: u32,
+    old_count: u32,
+    new_start: u32,
+    new_count: u32,
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let hunk_text = format!(
         "@@ -{},{} +{},{} @@",
         old_start, old_count, new_start, new_count
@@ -233,7 +249,12 @@ fn hunk_line<'a, M: 'a>(old_start: u32, old_count: u32, new_start: u32, new_coun
     .into()
 }
 
-fn context_line<'a, M: 'a>(old_num: u32, new_num: u32, content: String, colors: &DiffColors) -> Element<'a, M> {
+fn context_line<'a, M: 'a>(
+    old_num: u32,
+    new_num: u32,
+    content: String,
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let gutter_bg = colors.gutter_bg;
 
     row![
@@ -246,7 +267,11 @@ fn context_line<'a, M: 'a>(old_num: u32, new_num: u32, content: String, colors: 
     .into()
 }
 
-fn added_line<'a, M: 'a>(new_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn added_line<'a, M: 'a>(
+    new_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.added_text;
     let bg_color = colors.added_bg;
     let highlight_color = colors.added_highlight;
@@ -279,7 +304,11 @@ fn added_line<'a, M: 'a>(new_num: u32, segments: &[DiffSegment], colors: &DiffCo
     .into()
 }
 
-fn removed_line<'a, M: 'a>(old_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn removed_line<'a, M: 'a>(
+    old_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.removed_text;
     let bg_color = colors.removed_bg;
     let highlight_color = colors.removed_highlight;
@@ -359,7 +388,11 @@ fn side_hunk_line<'a, M: 'a>(hunk_text: String, colors: &DiffColors) -> Element<
         .into()
 }
 
-fn side_context_line<'a, M: 'a>(line_num: u32, content: &str, colors: &DiffColors) -> Element<'a, M> {
+fn side_context_line<'a, M: 'a>(
+    line_num: u32,
+    content: &str,
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let gutter_bg = colors.gutter_bg;
 
     row![
@@ -372,7 +405,11 @@ fn side_context_line<'a, M: 'a>(line_num: u32, content: &str, colors: &DiffColor
     .into()
 }
 
-fn side_added_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn side_added_line<'a, M: 'a>(
+    line_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.added_text;
     let bg_color = colors.added_bg;
     let highlight_color = colors.added_highlight;
@@ -405,7 +442,11 @@ fn side_added_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors: &
     .into()
 }
 
-fn side_removed_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn side_removed_line<'a, M: 'a>(
+    line_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.removed_text;
     let bg_color = colors.removed_bg;
     let highlight_color = colors.removed_highlight;
@@ -444,9 +485,7 @@ fn side_empty_line<'a, M: 'a>(colors: &DiffColors) -> Element<'a, M> {
     container(
         row![
             side_gutter::<M>(0, gutter_bg),
-            container(text("").size(11))
-                .padding([2, 4])
-                .width(Fill),
+            container(text("").size(11)).padding([2, 4]).width(Fill),
         ]
         .spacing(0),
     )
@@ -474,7 +513,11 @@ fn side_gutter<'a, M: 'a>(line_num: u32, bg: Color) -> Element<'a, M> {
 
 // === Single column view line helpers ===
 
-fn single_context_line<'a, M: 'a>(line_num: u32, content: &str, colors: &DiffColors) -> Element<'a, M> {
+fn single_context_line<'a, M: 'a>(
+    line_num: u32,
+    content: &str,
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let gutter_bg = colors.gutter_bg;
 
     row![
@@ -487,7 +530,11 @@ fn single_context_line<'a, M: 'a>(line_num: u32, content: &str, colors: &DiffCol
     .into()
 }
 
-fn single_added_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn single_added_line<'a, M: 'a>(
+    line_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.added_text;
     let bg_color = colors.added_bg;
     let highlight_color = colors.added_highlight;
@@ -520,7 +567,11 @@ fn single_added_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors:
     .into()
 }
 
-fn single_removed_line<'a, M: 'a>(line_num: u32, segments: &[DiffSegment], colors: &DiffColors) -> Element<'a, M> {
+fn single_removed_line<'a, M: 'a>(
+    line_num: u32,
+    segments: &[DiffSegment],
+    colors: &DiffColors,
+) -> Element<'a, M> {
     let text_color = colors.removed_text;
     let bg_color = colors.removed_bg;
     let highlight_color = colors.removed_highlight;

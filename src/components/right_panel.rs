@@ -4,8 +4,8 @@ use iced::widget::{button, column, container, row, rule, scrollable, text};
 use iced::{Border, Element, Fill, Length, Subscription, Theme};
 
 use crate::components::{description_editor, diff, summary};
-use crate::jj::{CommitInfo, FileChange, FileDiff};
 use crate::state_wrapper::StateMut;
+use dojo_jj::{CommitInfo, FileChange, FileDiff};
 
 /// Tab types for the right panel
 #[derive(Debug, Clone, PartialEq)]

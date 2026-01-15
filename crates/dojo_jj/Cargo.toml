@@ -1,0 +1,18 @@
+[package]
+name = "dojo_jj"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+description = "Jujutsu repository wrapper for Dojo"
+
+[dependencies]
+iced = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+jj-lib = { workspace = true }
+jj-cli = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+
+# Internal error handling in repo.rs
+anyhow = { workspace = true }

@@ -3,8 +3,8 @@ use iced::{Element, Fill, Length, Theme};
 
 use crate::components::description_editor;
 use crate::components::diff::view_file_diff_content;
-use crate::jj::{ChangeKind, CommitInfo, FileChange, FileDiff};
 use crate::settings::DiffSettings;
+use dojo_jj::{ChangeKind, CommitInfo, DiffLine, FileChange, FileDiff};
 
 /// Messages for summary interactions
 #[derive(Debug, Clone)]
@@ -257,8 +257,8 @@ fn file_dropdown<'a>(
     // Calculate diff stats if available
     let stats = if let Some(d) = diff {
         let (adds, removes) = d.lines.iter().fold((0, 0), |(a, r), line| match line {
-            crate::jj::DiffLine::Added(_) => (a + 1, r),
-            crate::jj::DiffLine::Removed(_) => (a, r + 1),
+            DiffLine::Added(_) => (a + 1, r),
+            DiffLine::Removed(_) => (a, r + 1),
             _ => (a, r),
         });
         row![
