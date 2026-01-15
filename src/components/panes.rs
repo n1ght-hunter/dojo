@@ -5,6 +5,7 @@ use iced::{Element, Fill, Size, Subscription, Theme};
 use crate::components::{right_panel, sidebar};
 use crate::repo_state::RepoState;
 use crate::settings::Settings;
+use crate::state_wrapper::StateRef;
 
 /// Types of panes in the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,11 +226,15 @@ impl PaneState {
         let map_commit_clone = map_commit.clone();
         let map_right_panel_clone = map_right_panel.clone();
 
+        // Create StateRefs outside closure - they're Copy so they'll be copied in
+        let sidebar_state = StateRef::new(&repo.sidebar, settings);
+        let right_panel_state = StateRef::new(&repo.right_panel, settings);
+
         let pane_content =
             pane_grid::PaneGrid::new(&self.panes, move |_pane, pane_type, _is_maximized| {
                 let content: Element<'_, M> = match pane_type {
                     PaneType::Sidebar => {
-                        container(sidebar::view(&repo.sidebar).map(map_sidebar_clone.clone()))
+                        container(sidebar::view(sidebar_state).map(map_sidebar_clone.clone()))
                             .style(container::bordered_box)
                             .width(Fill)
                             .height(Fill)
@@ -249,8 +254,7 @@ impl PaneState {
                             diffs: &repo.diffs,
                             theme,
                         };
-                        right_panel::view(&repo.right_panel, settings, ctx)
-                            .map(map_right_panel_clone.clone())
+                        right_panel::view(right_panel_state, ctx).map(map_right_panel_clone.clone())
                     }
                 };
 

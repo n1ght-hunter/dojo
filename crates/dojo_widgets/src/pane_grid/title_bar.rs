@@ -3,7 +3,7 @@ use iced::advanced::layout;
 use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree};
-use iced::advanced::{self, Clipboard, Layout, Shell};
+use iced::advanced::{Clipboard, Layout, Shell};
 use iced::mouse;
 use iced::widget::container;
 use iced::{Element, Event, Padding, Point, Rectangle, Size, Vector};
@@ -75,7 +75,6 @@ where
     }
 
     /// Sets the style class of the [`TitleBar`].
-    #[cfg(feature = "advanced")]
     #[must_use]
     pub fn class(mut self, class: impl Into<Theme::Class<'a>>) -> Self {
         self.class = class.into();

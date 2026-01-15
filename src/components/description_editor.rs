@@ -150,7 +150,7 @@ impl Default for State {
     }
 }
 
-use crate::state_wrapper::StateMut;
+use crate::state_wrapper::{StateMut, StateRef};
 
 /// Update the editor state based on a message
 pub fn update(mut state: StateMut<'_, State>, message: Message) {
@@ -177,8 +177,8 @@ pub fn update(mut state: StateMut<'_, State>, message: Message) {
 }
 
 /// Render the editor view
-pub fn view(state: &State) -> Element<'_, Message> {
-    let editor = text_editor(&state.content)
+pub fn view<'a>(state: StateRef<'a, State>) -> Element<'a, Message> {
+    let editor = text_editor(&state.state().content)
         .on_action(Message::EditorAction)
         .height(Length::Fixed(120.0));
 

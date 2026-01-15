@@ -4,7 +4,7 @@ use iced::widget::{button, column, container, row, rule, scrollable, text};
 use iced::{Border, Element, Fill, Length, Subscription, Theme};
 
 use crate::components::{description_editor, diff, summary};
-use crate::state_wrapper::StateMut;
+use crate::state_wrapper::{StateMut, StateRef};
 use dojo_jj::{CommitInfo, FileChange, FileDiff};
 
 /// Tab types for the right panel
@@ -125,20 +125,17 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         .map(|msg| Message::Summary(summary::Message::DescriptionEditor(msg)))
 }
 
-pub fn view<'a>(
-    state: &'a State,
-    settings: &'a crate::settings::Settings,
-    ctx: Context<'a>,
-) -> Element<'a, Message> {
-    let tab_bar = view_tab_bar(state, ctx.files);
+pub fn view<'a>(state: StateRef<'a, State>, ctx: Context<'a>) -> Element<'a, Message> {
+    let settings = state.settings();
+    let tab_bar = view_tab_bar(&state, ctx.files);
 
-    let content = match &state.active_tab {
+    let content = match &state.state().active_tab {
         Tab::Summary => summary::view(
             ctx.commit,
             ctx.files,
             ctx.diffs,
-            &state.expanded_files,
-            &state.description_editor,
+            &state.state().expanded_files,
+            state.map(|s| &s.description_editor),
             0.0, // Width not needed for summary layout currently
             &settings.diff,
             ctx.theme,
@@ -168,7 +165,7 @@ pub fn view<'a>(
     column![tab_bar, content].spacing(0).into()
 }
 
-fn view_tab_bar<'a>(state: &'a State, files: &'a [FileChange]) -> Element<'a, Message> {
+fn view_tab_bar<'a>(state: &StateRef<'a, State>, files: &'a [FileChange]) -> Element<'a, Message> {
     // Summary tab (always first)
     let summary_active = state.active_tab == Tab::Summary;
     let summary_tab = tab_button("Summary", summary_active, Message::SwitchTab(Tab::Summary));

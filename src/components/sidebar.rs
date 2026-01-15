@@ -1,7 +1,7 @@
 use iced::widget::{column, container, scrollable, text};
 use iced::{Element, Fill};
 
-use crate::state_wrapper::StateMut;
+use crate::state_wrapper::{StateMut, StateRef};
 
 /// Messages for sidebar interactions
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub fn update(_state: StateMut<'_, State>, message: Message) {
     }
 }
 
-pub fn view(_state: &State) -> Element<'static, Message> {
+pub fn view<'a>(_state: StateRef<'a, State>) -> Element<'a, Message> {
     let content = column![
         text("BOOKMARKS").size(10).style(text::primary),
         bookmark_item("main", true),

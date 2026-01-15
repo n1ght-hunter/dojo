@@ -14,20 +14,35 @@ use dojo_jj::WorkspaceCommand;
 ///
 /// Carries app-level settings and provides read-only access to component state.
 /// Use in `view()` functions when components only need to read state.
-#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+#[derive(Debug)]
 pub struct StateRef<'a, T> {
-    inner: &'a T,
+    state: &'a T,
     settings: &'a Settings,
 }
 
+impl<T> Clone for StateRef<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for StateRef<'_, T> {}
+
+#[allow(dead_code)]
 impl<'a, T> StateRef<'a, T> {
     /// Create a new immutable state wrapper.
-    pub fn new(inner: &'a T, settings: &'a Settings) -> Self {
-        Self { inner, settings }
+    pub fn new(state: &'a T, settings: &'a Settings) -> Self {
+        Self { state, settings }
+    }
+
+    /// Access the wrapped state with the original lifetime.
+    pub fn state(&self) -> &'a T {
+        self.state
     }
 
     /// Access the app-level settings.
-    pub fn settings(&self) -> &Settings {
+    pub fn settings(&self) -> &'a Settings {
         self.settings
     }
 
@@ -36,7 +51,7 @@ impl<'a, T> StateRef<'a, T> {
     /// Useful for drilling into nested component state.
     pub fn map<U>(&self, f: impl FnOnce(&'a T) -> &'a U) -> StateRef<'a, U> {
         StateRef {
-            inner: f(self.inner),
+            state: f(self.state),
             settings: self.settings,
         }
     }
@@ -44,7 +59,7 @@ impl<'a, T> StateRef<'a, T> {
     /// Map with a closure that borrows self (shorter lifetime).
     pub fn map_ref<'b, U>(&'b self, f: impl FnOnce(&'b T) -> &'b U) -> StateRef<'b, U> {
         StateRef {
-            inner: f(self.inner),
+            state: f(self.state),
             settings: self.settings,
         }
     }
@@ -54,7 +69,7 @@ impl<T> Deref for StateRef<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.inner
+        self.state
     }
 }
 
@@ -88,6 +103,7 @@ impl<'a, T> StateMut<'a, T> {
 
     /// Send a command to the worker (fire and forget).
     /// Panics if no worker is attached.
+    #[allow(dead_code)]
     pub fn send_command(&self, cmd: WorkspaceCommand) {
         let tx = self
             .worker_tx
@@ -98,6 +114,7 @@ impl<'a, T> StateMut<'a, T> {
 
     /// Get a clone of the worker sender for Task-based commands.
     /// Panics if no worker is attached.
+    #[allow(dead_code)]
     pub fn worker_tx(&self) -> mpsc::Sender<WorkspaceCommand> {
         self.worker_tx
             .clone()
@@ -105,16 +122,19 @@ impl<'a, T> StateMut<'a, T> {
     }
 
     /// Access the app-level settings (immutable).
+    #[allow(dead_code)]
     pub fn settings(&self) -> &Settings {
         self.settings
     }
 
     /// Access the app-level settings (mutable).
+    #[allow(dead_code)]
     pub fn settings_mut(&mut self) -> &mut Settings {
         self.settings
     }
 
     /// Downgrade to an immutable reference.
+    #[allow(dead_code)]
     pub fn as_ref(&self) -> StateRef<'_, T> {
         StateRef::new(self.inner, self.settings)
     }
@@ -142,7 +162,7 @@ impl<'a, T> StateMut<'a, T> {
     }
 }
 
-impl<T> Deref for StateMut<'_, T> {
+impl<'a, T> Deref for StateMut<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -150,7 +170,7 @@ impl<T> Deref for StateMut<'_, T> {
     }
 }
 
-impl<T> DerefMut for StateMut<'_, T> {
+impl<'a, T> DerefMut for StateMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner
     }

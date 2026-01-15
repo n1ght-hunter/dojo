@@ -154,7 +154,6 @@ use iced::{
 };
 
 use iced::advanced::Layout;
-use iced::advanced::renderer::Renderer as RendererTrait;
 
 const DRAG_DEADBAND_DISTANCE: f32 = 10.0;
 const THICKNESS_RATIO: f32 = 25.0;
@@ -347,7 +346,6 @@ where
     }
 
     /// Sets the style class of the [`PaneGrid`].
-    #[cfg(feature = "advanced")]
     #[must_use]
     pub fn class(mut self, class: impl Into<<Theme as Catalog>::Class<'a>>) -> Self {
         self.class = class.into();

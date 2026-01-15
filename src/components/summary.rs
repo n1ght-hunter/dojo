@@ -4,6 +4,7 @@ use iced::{Element, Fill, Length, Theme};
 use crate::components::description_editor;
 use crate::components::diff::view_file_diff_content;
 use crate::settings::DiffSettings;
+use crate::state_wrapper::StateRef;
 use dojo_jj::{ChangeKind, CommitInfo, DiffLine, FileChange, FileDiff};
 
 /// Messages for summary interactions
@@ -23,9 +24,9 @@ pub fn view<'a>(
     files: &'a [FileChange],
     diffs: &'a [FileDiff],
     expanded_files: &'a std::collections::HashSet<String>,
-    description_editor: &'a description_editor::State,
+    description_editor: StateRef<'a, description_editor::State>,
     width: f32,
-    settings: &'a DiffSettings,
+    diff_settings: &'a DiffSettings,
     theme: &'a Theme,
 ) -> Element<'a, Message> {
     match commit {
@@ -40,7 +41,7 @@ pub fn view<'a>(
             let content = column![
                 metadata_section(commit),
                 message_section(commit, description_editor),
-                files_section(files, diffs, expanded_files, width, settings, theme),
+                files_section(files, diffs, expanded_files, width, diff_settings, theme),
             ]
             .spacing(0);
 
@@ -119,7 +120,7 @@ fn bookmark_badge(name: String) -> Element<'static, Message> {
 
 fn message_section<'a>(
     commit: &'a CommitInfo,
-    description_editor: &'a description_editor::State,
+    description_editor: StateRef<'a, description_editor::State>,
 ) -> Element<'a, Message> {
     if description_editor.editing {
         // Edit mode: delegate to DescriptionEditor component

@@ -1,5 +1,4 @@
 use iced::Element;
-use iced::advanced;
 use iced::widget::container;
 
 /// The controls of a [`Pane`].

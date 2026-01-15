@@ -43,11 +43,6 @@ struct GraphLine {
 }
 
 impl GraphLine {
-    /// Check if this line passes through the given row
-    fn passes_row(&self, row: usize) -> bool {
-        row >= self.source_row && row < self.target_row
-    }
-
     /// Check if this line is vertical (same column)
     fn is_vertical(&self) -> bool {
         self.source_col == self.target_col
