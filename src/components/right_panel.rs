@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use iced::widget::{button, column, container, responsive, row, rule, scrollable, text};
-use iced::{Border, Element, Fill, Length, Theme};
+use iced::{Border, Element, Fill, Length, Subscription, Theme};
 
-use crate::components::summary::DescriptionEditState;
+use crate::components::description_editor::{self, DescriptionEditor};
 use crate::components::{diff, summary};
 use crate::jj::{CommitInfo, FileChange, FileDiff};
 use crate::settings::DiffSettings;
@@ -26,7 +26,7 @@ pub enum Message {
 pub struct RightPanel {
     pub active_tab: Tab,
     pub expanded_files: HashSet<String>,
-    pub description_edit: DescriptionEditState,
+    pub description_editor: DescriptionEditor,
 }
 
 impl RightPanel {
@@ -34,7 +34,7 @@ impl RightPanel {
         Self {
             active_tab: Tab::Summary,
             expanded_files: HashSet::new(),
-            description_edit: DescriptionEditState::new(),
+            description_editor: DescriptionEditor::new(),
         }
     }
 
@@ -59,17 +59,22 @@ impl RightPanel {
                 }
                 summary::Message::StartEditDescription => {
                     if let Some(commit) = commit {
-                        self.description_edit.start_editing(&commit.description);
+                        self.description_editor.start_editing(&commit.description);
                     }
                 }
-                summary::Message::DescriptionEditorAction(action) => {
-                    self.description_edit.content.perform(action);
-                }
-                summary::Message::CancelEditDescription => {
-                    self.description_edit.cancel();
-                }
-                summary::Message::SaveDescription => {
-                    // Handled by repo_state to perform the actual save
+                summary::Message::DescriptionEditor(editor_msg) => {
+                    // Handle save/cancel specially, delegate rest to editor
+                    match &editor_msg {
+                        description_editor::Message::Cancel => {
+                            self.description_editor.cancel();
+                        }
+                        description_editor::Message::Save => {
+                            // Handled by repo_state to perform the actual save
+                        }
+                        _ => {
+                            self.description_editor.update(editor_msg);
+                        }
+                    }
                 }
             },
         }
@@ -84,17 +89,24 @@ impl RightPanel {
     pub fn clear(&mut self) {
         self.active_tab = Tab::Summary;
         self.expanded_files.clear();
-        self.description_edit.cancel();
+        self.description_editor.cancel();
     }
 
     /// Get the current description draft text (for saving)
     pub fn get_description_draft(&self) -> String {
-        self.description_edit.get_text()
+        self.description_editor.get_text()
     }
 
     /// Called after description is saved successfully
     pub fn description_saved(&mut self) {
-        self.description_edit.cancel();
+        self.description_editor.cancel();
+    }
+
+    /// Subscription for keyboard shortcuts when editing
+    pub fn subscription(&self) -> Subscription<Message> {
+        self.description_editor
+            .subscription()
+            .map(|msg| Message::Summary(summary::Message::DescriptionEditor(msg)))
     }
 
     pub fn view<'a>(
@@ -164,7 +176,7 @@ impl RightPanel {
                 files,
                 diffs,
                 &self.expanded_files,
-                &self.description_edit,
+                &self.description_editor,
                 width,
                 settings,
                 theme,

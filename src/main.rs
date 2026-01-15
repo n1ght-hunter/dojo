@@ -4,7 +4,6 @@ mod jj;
 mod repo_state;
 mod screens;
 mod settings;
-
 use std::path::PathBuf;
 
 use iced::widget::{center, column, container, text};
@@ -46,8 +45,21 @@ pub enum Message {
     RepoPathSelected(Option<PathBuf>),
 }
 
-fn subscription(_app: &App) -> Subscription<Message> {
-    panes::subscription().map(Message::Panes)
+fn subscription(app: &App) -> Subscription<Message> {
+    let pane_sub = panes::subscription().map(Message::Panes);
+
+    // Get subscription from active repo's right panel (for keyboard shortcuts)
+    if let Some(repo) = app.repos.get(app.active_repo) {
+        let active_index = app.active_repo;
+        let right_panel_sub = repo
+            .right_panel
+            .subscription()
+            .with(active_index)
+            .map(|(index, msg)| Message::Repo(index, repo_state::Message::RightPanel(msg)));
+        Subscription::batch([pane_sub, right_panel_sub])
+    } else {
+        pane_sub
+    }
 }
 
 fn boot() -> (App, Task<Message>) {

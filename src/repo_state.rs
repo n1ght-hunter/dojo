@@ -170,28 +170,33 @@ impl RepoState {
                             self.right_panel.expand_all(&self.files);
                             return Task::none();
                         }
-                        crate::components::summary::Message::SaveDescription => {
-                            // Save description to repository
-                            if let Some(commit) = selected_commit {
-                                let new_description = self.right_panel.get_description_draft();
-                                let commit_id = commit.commit_id.clone();
-                                let handle = self.handle.clone();
-                                let path = self.path.clone();
+                        crate::components::summary::Message::DescriptionEditor(editor_msg) => {
+                            if matches!(
+                                editor_msg,
+                                crate::components::description_editor::Message::Save
+                            ) {
+                                // Save description to repository
+                                if let Some(commit) = selected_commit {
+                                    let new_description = self.right_panel.get_description_draft();
+                                    let commit_id = commit.commit_id.clone();
+                                    let handle = self.handle.clone();
+                                    let path = self.path.clone();
 
-                                return Task::perform(
-                                    async move {
-                                        save_description(
-                                            handle,
-                                            &path,
-                                            &commit_id,
-                                            &new_description,
-                                        )
-                                        .await
-                                    },
-                                    Message::DescriptionSaved,
-                                );
+                                    return Task::perform(
+                                        async move {
+                                            save_description(
+                                                handle,
+                                                &path,
+                                                &commit_id,
+                                                &new_description,
+                                            )
+                                            .await
+                                        },
+                                        Message::DescriptionSaved,
+                                    );
+                                }
+                                return Task::none();
                             }
-                            return Task::none();
                         }
                         _ => {}
                     },
